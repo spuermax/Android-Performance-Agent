@@ -19,7 +19,7 @@
 - DeepSeek Agent Loop
 
 `adb_devices` 可以检查本机 ADB 环境，以及 Android 真机和模拟器的连接状态，
-为后续 Macrobenchmark 自动执行做准备。Macrobenchmark 尚未实现。
+为 Macrobenchmark 自动执行做准备。
 
 `inspect_app_target` 可以识别后续 Macrobenchmark 要测试的 application module、
 显式 applicationId 和 Launcher Activity。当前默认静态分析 `debug` variant；

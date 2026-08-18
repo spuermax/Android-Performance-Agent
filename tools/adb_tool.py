@@ -545,6 +545,8 @@ class AdbLaunchAppTool(BaseTool):
     PACKAGE_CHECK_TIMEOUT_SECONDS = 15
     LAUNCH_TIMEOUT_SECONDS = 30
     PROCESS_CHECK_TIMEOUT_SECONDS = 15
+    PROCESS_CHECK_ATTEMPTS = 3
+    PROCESS_CHECK_RETRY_DELAY_SECONDS = 0.4
     APPLICATION_ID_PATTERN = re.compile(
         r"[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*)+"
     )
@@ -721,8 +723,8 @@ class AdbLaunchAppTool(BaseTool):
                 activity_started=True,
                 error_type="LAUNCH_VERIFICATION_FAILED",
                 summary=(
-                    "Activity 启动命令执行成功，但未检测到目标应用进程，"
-                    "App 可能启动后立即退出或发生崩溃。"
+                    "Activity 启动命令执行成功，但目标进程未保持存活，"
+                    "可能启动后退出或崩溃，需要 logcat 进一步确认。"
                 ),
                 important_logs=self._launch_logs(raw),
             )
@@ -844,31 +846,40 @@ class AdbLaunchAppTool(BaseTool):
         serial: str,
         application_id: str,
     ) -> list[int]:
-        try:
-            completed = subprocess.run(
-                [
-                    adb_path,
-                    "-s",
-                    serial,
-                    "shell",
-                    "pidof",
-                    application_id,
-                ],
-                capture_output=True,
-                text=True,
-                timeout=self.PROCESS_CHECK_TIMEOUT_SECONDS,
-                shell=False,
-            )
-        except (subprocess.TimeoutExpired, OSError):
-            return []
+        for attempt in range(self.PROCESS_CHECK_ATTEMPTS):
+            try:
+                completed = subprocess.run(
+                    [
+                        adb_path,
+                        "-s",
+                        serial,
+                        "shell",
+                        "pidof",
+                        application_id,
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=self.PROCESS_CHECK_TIMEOUT_SECONDS,
+                    shell=False,
+                )
+            except (subprocess.TimeoutExpired, OSError):
+                pids: list[int] = []
+            else:
+                pids = (
+                    [
+                        int(value)
+                        for value in (completed.stdout or "").split()
+                        if value.isdigit() and int(value) > 0
+                    ]
+                    if completed.returncode == 0
+                    else []
+                )
 
-        if completed.returncode != 0:
-            return []
-        return [
-            int(value)
-            for value in (completed.stdout or "").split()
-            if value.isdigit() and int(value) > 0
-        ]
+            if pids:
+                return pids
+            if attempt < self.PROCESS_CHECK_ATTEMPTS - 1:
+                time.sleep(self.PROCESS_CHECK_RETRY_DELAY_SECONDS)
+        return []
 
     @staticmethod
     def _classify_launch_error(raw: str) -> str | None:

@@ -31,7 +31,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--max-steps",
         type=int,
-        default=6,
+        default=15,
         help="Maximum number of model/tool loop steps.",
     )
     parser.add_argument(

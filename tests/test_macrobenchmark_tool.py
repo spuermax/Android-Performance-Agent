@@ -113,6 +113,21 @@ def benchmark_data(*, include_ttid: bool = True, include_ttfd: bool = False) -> 
     }
 
 
+def benchmark_data_with_official_context() -> dict:
+    data = benchmark_data()
+    data["context"] = {
+        "build": {
+            "brand": "Google",
+            "model": "Pixel 9 Pro",
+            "device": "komodo",
+            "version": {"sdk": 35},
+        },
+        "cpuCoreCount": 8,
+        "cpuMaxFreqHz": 3200000000,
+    }
+    return data
+
+
 def output_root(module: Path) -> Path:
     return module / "build" / "outputs" / "connected_android_test_additional_output"
 
@@ -172,6 +187,42 @@ def test_macrobenchmark_reports_missing_test(tmp_path: Path) -> None:
     result = tool.execute(arguments)
 
     assert result["error_type"] == "BENCHMARK_TEST_NOT_FOUND"
+
+
+@pytest.mark.parametrize(
+    ("source_root", "extension"),
+    [
+        ("src/main/java", ".java"),
+        ("src/main/kotlin", ".kt"),
+        ("src/androidTest/java", ".java"),
+        ("src/androidTest/kotlin", ".kt"),
+    ],
+)
+def test_macrobenchmark_finds_test_by_exact_class_path_in_supported_sources(
+    tmp_path: Path,
+    source_root: str,
+    extension: str,
+) -> None:
+    tool, _, module = create_benchmark_project(tmp_path, with_test=False)
+    exact_file = (
+        module
+        / source_root
+        / "com"
+        / "example"
+        / "benchmark"
+        / f"ExampleStartupBenchmark{extension}"
+    )
+    exact_file.parent.mkdir(parents=True)
+    exact_file.write_text("class ExampleStartupBenchmark {}\n", encoding="utf-8")
+    decoy = module / source_root / "wrong" / exact_file.name
+    decoy.parent.mkdir(parents=True)
+    decoy.write_text("class ExampleStartupBenchmark {}\n", encoding="utf-8")
+
+    found = tool._find_test_file(tmp_path, module, TEST_CLASS)
+
+    assert found == exact_file.resolve()
+    exact_file.unlink()
+    assert tool._find_test_file(tmp_path, module, TEST_CLASS) is None
 
 
 def test_macrobenchmark_reports_adb_not_found(monkeypatch, tmp_path: Path) -> None:
@@ -250,7 +301,12 @@ def test_macrobenchmark_reads_ttid_only_from_json(
     assert result["repeat_iterations"] == 3
     assert result["warmup_iterations"] == 0
     assert result["run_count"] == 3
-    assert result["device_context"]["model"] == "Pixel 8"
+    assert result["device_context"] == {
+        "brand": "Google",
+        "model": "Pixel 8",
+        "sdk": 34,
+        "cpuCoreCount": 8,
+    }
     assert calls[1].kwargs["shell"] is False
     assert calls[1].kwargs["env"]["ANDROID_SERIAL"] == "device-1"
     assert not any("suppressErrors" in str(value) for value in calls[1].args[0])
@@ -273,6 +329,33 @@ def test_macrobenchmark_reads_ttfd_from_json(monkeypatch, tmp_path: Path) -> Non
     assert result["ttfd_available"] is True
     assert result["ttfd_ms"]["metric_name"] == "timeToFullDisplayMs"
     assert result["ttfd_ms"]["median"] == 550.5
+
+
+def test_macrobenchmark_reads_official_nested_device_context(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    tool, arguments, module = create_benchmark_project(tmp_path)
+    mock_successful_run(
+        monkeypatch,
+        module,
+        lambda: write_benchmark_json(
+            module,
+            benchmark_data_with_official_context(),
+        ),
+    )
+
+    result = tool.execute(arguments)
+
+    assert result["success"] is True
+    assert result["device_context"] == {
+        "brand": "Google",
+        "model": "Pixel 9 Pro",
+        "device": "komodo",
+        "sdk": 35,
+        "cpuCoreCount": 8,
+        "cpuMaxFreqHz": 3200000000,
+    }
 
 
 def test_macrobenchmark_succeeds_without_ttfd(monkeypatch, tmp_path: Path) -> None:

@@ -645,12 +645,19 @@ def test_adb_launch_fails_when_pidof_is_empty(
             completed(
                 "Status: ok\nActivity: com.example.app/.MainActivity\n"
             ),
-            completed(returncode=1),
+            completed(),
+            completed(),
+            completed(),
         ]
     )
     monkeypatch.setattr(
         "tools.adb_tool.subprocess.run",
         lambda *args, **kwargs: next(responses),
+    )
+    sleep_calls = []
+    monkeypatch.setattr(
+        "tools.adb_tool.time.sleep",
+        lambda seconds: sleep_calls.append(seconds),
     )
 
     result = tool.execute(arguments)
@@ -661,6 +668,44 @@ def test_adb_launch_fails_when_pidof_is_empty(
     assert result["process_running"] is False
     assert result["pids"] == []
     assert result["error_type"] == "LAUNCH_VERIFICATION_FAILED"
+    assert "未保持存活" in result["summary"]
+    assert "需要 logcat 进一步确认" in result["summary"]
+    assert sleep_calls == [0.4, 0.4]
+
+
+def test_adb_launch_retries_pidof_until_process_appears(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    tool, arguments = create_launch_tool(tmp_path)
+    monkeypatch.setattr("tools.adb_tool.shutil.which", lambda _: ADB_PATH)
+    responses = iter(
+        [
+            completed("List of devices attached\nemulator-5554 device\n"),
+            completed("package:/data/app/example/base.apk\n"),
+            completed(
+                "Status: ok\nActivity: com.example.app/.MainActivity\n"
+            ),
+            completed(),
+            completed("30592\n"),
+        ]
+    )
+    monkeypatch.setattr(
+        "tools.adb_tool.subprocess.run",
+        lambda *args, **kwargs: next(responses),
+    )
+    sleep_calls = []
+    monkeypatch.setattr(
+        "tools.adb_tool.time.sleep",
+        lambda seconds: sleep_calls.append(seconds),
+    )
+
+    result = tool.execute(arguments)
+
+    assert result["success"] is True
+    assert result["process_running"] is True
+    assert result["pids"] == [30592]
+    assert sleep_calls == [0.4]
 
 
 @pytest.mark.parametrize(

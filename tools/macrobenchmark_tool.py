@@ -435,20 +435,27 @@ class RunMacrobenchmarkTool(BaseTool):
         module_path: Path,
         test_class: str,
     ) -> Path | None:
-        android_test = module_path / "src" / "androidTest"
-        if not android_test.is_dir():
-            return None
         class_parts = test_class.split(".")
-        for extension in (".kt", ".java"):
-            suffix = tuple(class_parts[:-1] + [class_parts[-1] + extension])
-            for candidate in android_test.rglob(f"*{extension}"):
+        source_roots = (
+            module_path / "src" / "main" / "java",
+            module_path / "src" / "main" / "kotlin",
+            module_path / "src" / "androidTest" / "java",
+            module_path / "src" / "androidTest" / "kotlin",
+        )
+        for source_root in source_roots:
+            for extension in (".kt", ".java"):
+                candidate = source_root.joinpath(
+                    *class_parts[:-1],
+                    class_parts[-1] + extension,
+                )
+                if not candidate.is_file():
+                    continue
                 resolved = candidate.resolve()
                 try:
                     resolved.relative_to(project)
                 except ValueError:
                     continue
-                if resolved.parts[-len(suffix):] == suffix:
-                    return resolved
+                return resolved
         return None
 
     @staticmethod
@@ -577,15 +584,32 @@ class RunMacrobenchmarkTool(BaseTool):
         context = root_data.get("context")
         if not isinstance(context, dict):
             return {}
-        keys = (
-            "brand",
-            "model",
-            "device",
-            "sdk",
-            "cpuCoreCount",
-            "cpuMaxFreqHz",
-        )
-        return {key: context[key] for key in keys if key in context}
+
+        build = context.get("build")
+        if not isinstance(build, dict):
+            build = {}
+        version = build.get("version")
+        if not isinstance(version, dict):
+            version = {}
+
+        result: dict[str, Any] = {}
+        for key in ("brand", "model", "device"):
+            value = build.get(key)
+            if value is None:
+                value = context.get(key)
+            if value is not None:
+                result[key] = value
+
+        sdk = version.get("sdk")
+        if sdk is None:
+            sdk = context.get("sdk")
+        if sdk is not None:
+            result["sdk"] = sdk
+
+        for key in ("cpuCoreCount", "cpuMaxFreqHz"):
+            if key in context:
+                result[key] = context[key]
+        return result
 
     @staticmethod
     def _classify_failure(raw: str) -> str:
