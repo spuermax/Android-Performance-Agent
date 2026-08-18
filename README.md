@@ -1,6 +1,6 @@
 # Android Performance Agent
 
-> V0.2.5 开发中
+> V0.2.7 开发中
 
 使用 Python 3.12 + DeepSeek 的 Android 性能分析 Agent，通过 LLM Tool Calling 自主选择并调用工具。
 
@@ -15,6 +15,7 @@
 - `adb_install`
 - `adb_launch_app`
 - `run_macrobenchmark`
+- `setup_macrobenchmark`
 - Android module 类型识别
 - DeepSeek Agent Loop
 
@@ -38,6 +39,15 @@ Test，并只从本轮生成的 Benchmark JSON 读取真实 TTID/TTFD，同时�
 Perfetto trace 文件。Gradle Console 仅用于错误诊断，不作为性能指标来源。
 Tool 不会自动 suppress DEBUGGABLE、EMULATOR、LOW-BATTERY 或 NOT-PROFILEABLE，
 也不会创建或修改 Benchmark 测试。
+
+`setup_macrobenchmark` 可以为没有 Macrobenchmark 的普通 Android Application
+创建基础启动测试环境，包括独立 `com.android.test` module、COLD Startup Benchmark、
+非调试 benchmark build type 和 profileable 配置。它只负责搭建并返回
+`validation_task`，不会在内部执行 Build 或 Benchmark。
+
+当前版本只安全支持基础 Groovy/Kotlin Gradle DSL。复杂 Product Flavor、动态
+applicationId、Convention Plugin、高度自定义 build logic 或非标准多工程结构会返回
+阻塞错误，不会猜测或强行修改。
 
 ## 最简单的使用流程
 
@@ -81,5 +91,5 @@ cp .env.example .env
 
 所有项目读取和构建工具都绑定最初指定的 Android 项目目录，不能越界访问其他路径。Gradle 输出会在 Tool Layer 中清洗和分类，再交给 LLM 判断，以减少噪音和上下文开销。
 
-V0.2.5 已具备执行现有 Macrobenchmark Startup Test、从 Benchmark JSON 读取真实 TTID/TTFD，以及定位对应 Perfetto trace 的能力。当前只收集 trace 文件，不分析 Perfetto；性能判断与后续决策仍交给 LLM。
+V0.2.7 已能为普通 Android Application 创建基础 Macrobenchmark 启动测试环境，也能执行现有 Startup Test、从 Benchmark JSON 读取真实 TTID/TTFD，并定位对应 Perfetto trace。当前只收集 trace 文件，不分析 Perfetto；性能判断与后续决策仍交给 LLM。
 项目不使用 RAG、LangChain 或 LangGraph。

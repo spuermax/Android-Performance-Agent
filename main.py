@@ -12,6 +12,7 @@ from tools.adb_tool import AdbDevicesTool, AdbInstallTool, AdbLaunchAppTool
 from tools.app_target_tool import InspectAppTargetTool
 from tools.file_tool import ReadProjectFileTool
 from tools.gradle_tool import GradleBuildTool
+from tools.macrobenchmark_setup_tool import SetupMacrobenchmarkTool
 from tools.macrobenchmark_tool import RunMacrobenchmarkTool
 from tools.project_tool import InspectProjectTool
 from tools.registry import ToolRegistry
@@ -58,6 +59,7 @@ def main() -> int:
     registry.register(AdbInstallTool(allowed_project_path=project_path))
     registry.register(AdbLaunchAppTool(allowed_project_path=project_path))
     registry.register(RunMacrobenchmarkTool(allowed_project_path=project_path))
+    registry.register(SetupMacrobenchmarkTool(allowed_project_path=project_path))
 
     try:
         llm = DeepSeekResponsesClient.from_env()
