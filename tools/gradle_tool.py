@@ -18,7 +18,7 @@ class GradleBuildTool(BaseTool):
         "并在 assemble 成功后返回匹配当前 module/variant 的全部 APK 路径。"
     )
 
-    DEFAULT_TIMEOUT_SECONDS = 180
+    DEFAULT_TIMEOUT_SECONDS = 600
 
     @property
     def parameters_schema(self) -> dict[str, Any]:
@@ -66,6 +66,7 @@ class GradleBuildTool(BaseTool):
             return {
                 "success": False,
                 "task": task,
+                "timeout_seconds": self.DEFAULT_TIMEOUT_SECONDS,
                 "exit_code": None,
                 "duration_ms": 0,
                 "error_type": "GRADLEW_NOT_FOUND",
@@ -104,6 +105,7 @@ class GradleBuildTool(BaseTool):
             return {
                 "success": False,
                 "task": task,
+                "timeout_seconds": self.DEFAULT_TIMEOUT_SECONDS,
                 "exit_code": None,
                 "duration_ms": duration_ms,
                 "error_type": "BUILD_TIMEOUT",
@@ -128,6 +130,7 @@ class GradleBuildTool(BaseTool):
         return {
             "success": success,
             "task": task,
+            "timeout_seconds": self.DEFAULT_TIMEOUT_SECONDS,
             "exit_code": completed.returncode,
             "duration_ms": duration_ms,
             "error_type": error_type,

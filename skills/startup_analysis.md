@@ -54,6 +54,8 @@ Measure → Analyze → Optimize → Verify
 ## 决策原则
 
 - 优先真实证据，不凭经验猜测当前项目数据。
+- 同一 Tool、相同参数、相同失败原因，不要无条件立即重试；应先判断环境、参数或前置条件是否发生变化。
+- `gradle_build` 返回 `BUILD_TIMEOUT` 时，应表述为“构建超时，结果未知”，不能当作“构建失败”。
 - 构建失败是性能测试的前置阻塞问题。
 - 非 Android 项目应立即停止性能分析。
 - 没有 benchmark module 不等价于项目无法继续，只表示后续可能需要创建/配置 Macrobenchmark 模块。
