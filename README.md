@@ -1,4 +1,6 @@
-# Android Performance Agent V0.1.2
+# Android Performance Agent
+
+> V0.2 开发中（当前稳定基线：V0.1.2）
 
 使用 Python 3.12 + DeepSeek 的 Android 性能分析 Agent，通过 LLM Tool Calling 自主选择并调用工具。
 
@@ -8,8 +10,12 @@
 - `gradle_build`
 - `search_project_text`
 - `read_project_file`
+- `adb_devices`
 - Android module 类型识别
 - DeepSeek Agent Loop
+
+`adb_devices` 可以检查本机 ADB 环境，以及 Android 真机和模拟器的连接状态，
+为后续 Macrobenchmark 自动执行做准备。Macrobenchmark 尚未实现。
 
 ## 最简单的使用流程
 
@@ -53,4 +59,5 @@ cp .env.example .env
 
 所有项目读取和构建工具都绑定最初指定的 Android 项目目录，不能越界访问其他路径。Gradle 输出会在 Tool Layer 中清洗和分类，再交给 LLM 判断，以减少噪音和上下文开销。
 
-V0.1.2 不包含 Macrobenchmark、Perfetto、RAG、LangChain 或 LangGraph；这些不属于当前版本范围。
+V0.2 正在按阶段开发。目前只加入了 ADB 设备发现，尚未实现 adb_install、应用启动、Macrobenchmark 或 Perfetto。
+项目不使用 RAG、LangChain 或 LangGraph。

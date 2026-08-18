@@ -8,11 +8,12 @@ from dotenv import load_dotenv
 
 from agent.agent import AndroidPerformanceAgent
 from llm.client import DeepSeekResponsesClient
+from tools.adb_tool import AdbDevicesTool
+from tools.file_tool import ReadProjectFileTool
 from tools.gradle_tool import GradleBuildTool
 from tools.project_tool import InspectProjectTool
-from tools.search_tool import SearchProjectTextTool
-from tools.file_tool import ReadProjectFileTool
 from tools.registry import ToolRegistry
+from tools.search_tool import SearchProjectTextTool
 
 
 def parse_args() -> argparse.Namespace:
@@ -50,6 +51,7 @@ def main() -> int:
     registry.register(GradleBuildTool(allowed_project_path=project_path))
     registry.register(SearchProjectTextTool(allowed_project_path=project_path))
     registry.register(ReadProjectFileTool(allowed_project_path=project_path))
+    registry.register(AdbDevicesTool(allowed_project_path=project_path))
 
     try:
         llm = DeepSeekResponsesClient.from_env()
