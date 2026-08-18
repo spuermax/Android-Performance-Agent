@@ -14,7 +14,8 @@ class GradleBuildTool(BaseTool):
     description = (
         "在用户指定的 Android 项目中，通过项目自身 Gradle Wrapper 执行一个 Gradle Task。"
         "用于真实验证项目是否可构建。"
-        "返回成功状态、退出码、耗时、错误分类和经过裁剪的重要日志。"
+        "返回成功状态、退出码、耗时、错误分类、经过裁剪的重要日志，"
+        "并在 assemble 成功后返回匹配当前 module/variant 的全部 APK 路径。"
     )
 
     DEFAULT_TIMEOUT_SECONDS = 180
@@ -70,6 +71,7 @@ class GradleBuildTool(BaseTool):
                 "error_type": "GRADLEW_NOT_FOUND",
                 "summary": "项目中没有找到 gradlew。",
                 "important_logs": [],
+                "apk_outputs": [],
             }
 
         if gradlew.stat().st_mode & 0o111:
@@ -109,6 +111,7 @@ class GradleBuildTool(BaseTool):
                     f"Gradle 执行超过 {self.DEFAULT_TIMEOUT_SECONDS} 秒，已终止。"
                 ),
                 "important_logs": self._important_lines(raw),
+                "apk_outputs": [],
             }
 
         duration_ms = int((time.monotonic() - started) * 1000)
@@ -130,7 +133,83 @@ class GradleBuildTool(BaseTool):
             "error_type": error_type,
             "summary": summary,
             "important_logs": self._important_lines(raw),
+            "apk_outputs": (
+                self._find_apk_outputs(project, task) if success else []
+            ),
         }
+
+    @staticmethod
+    def _find_apk_outputs(project: Path, task: str) -> list[str]:
+        task_parts = task.strip(":").split(":")
+        task_name = task_parts[-1]
+        variant_match = re.fullmatch(r"assemble([A-Z][A-Za-z0-9]*)", task_name)
+        if variant_match is None:
+            return []
+
+        expected_variant = variant_match.group(1).lower()
+        expected_module = Path(*task_parts[:-1]) if len(task_parts) > 1 else None
+        outputs: list[str] = []
+
+        for candidate in project.rglob("*.apk"):
+            resolved = candidate.resolve()
+            try:
+                relative = resolved.relative_to(project)
+            except ValueError:
+                continue
+
+            parts = relative.parts
+            build_index = next(
+                (
+                    index
+                    for index in range(len(parts) - 2)
+                    if parts[index:index + 3] == (
+                        "build",
+                        "outputs",
+                        "apk",
+                    )
+                ),
+                None,
+            )
+            if build_index is None:
+                continue
+
+            module_path = Path(*parts[:build_index])
+            if expected_module is not None and module_path != expected_module:
+                continue
+            if not GradleBuildTool._is_application_module(
+                project,
+                module_path,
+            ):
+                continue
+
+            variant_parts = parts[build_index + 3:-1]
+            actual_variant = "".join(variant_parts).lower()
+            if actual_variant != expected_variant:
+                continue
+            outputs.append(str(resolved))
+
+        return sorted(outputs)
+
+    @staticmethod
+    def _is_application_module(project: Path, module_path: Path) -> bool:
+        module_dir = (project / module_path).resolve()
+        try:
+            module_dir.relative_to(project)
+        except ValueError:
+            return False
+
+        build_texts: list[str] = []
+        for filename in ("build.gradle.kts", "build.gradle"):
+            candidate = (module_dir / filename).resolve()
+            try:
+                candidate.relative_to(project)
+            except ValueError:
+                continue
+            if candidate.is_file():
+                build_texts.append(
+                    candidate.read_text(encoding="utf-8", errors="replace")
+                )
+        return "com.android.application" in "\n".join(build_texts)
 
     @staticmethod
     def _safe_decode(value: Any) -> str:

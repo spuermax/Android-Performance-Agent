@@ -1,6 +1,6 @@
 # Android Performance Agent
 
-> V0.2 开发中（当前稳定基线：V0.1.2）
+> V0.2.5 开发中
 
 使用 Python 3.12 + DeepSeek 的 Android 性能分析 Agent，通过 LLM Tool Calling 自主选择并调用工具。
 
@@ -11,11 +11,33 @@
 - `search_project_text`
 - `read_project_file`
 - `adb_devices`
+- `inspect_app_target`
+- `adb_install`
+- `adb_launch_app`
+- `run_macrobenchmark`
 - Android module 类型识别
 - DeepSeek Agent Loop
 
 `adb_devices` 可以检查本机 ADB 环境，以及 Android 真机和模拟器的连接状态，
 为后续 Macrobenchmark 自动执行做准备。Macrobenchmark 尚未实现。
+
+`inspect_app_target` 可以识别后续 Macrobenchmark 要测试的 application module、
+显式 applicationId 和 Launcher Activity。当前默认静态分析 `debug` variant；
+product flavors 仍可能需要后续通过构建产物或 ADB 确认。
+
+`adb_install` 可以把项目目录内已经构建好的 APK 安装到显式指定的在线设备。
+它不会自动选择设备或触发 Build；`gradle_build` 在 assemble 成功后会返回匹配的
+`apk_outputs`，存在多个 APK 时全部返回，由 Agent 决定下一步并要求明确目标。
+
+`adb_launch_app` 会在显式指定的设备上验证 package 已安装、Launcher Component
+可以启动且目标进程存在。它只做 Launch Verification；不会 force-stop，也不会把
+`am start -W` 的时间字段作为 TTID、TTFD 或正式启动性能数据。
+
+`run_macrobenchmark` 可以运行项目中已经存在的 AndroidX Macrobenchmark Startup
+Test，并只从本轮生成的 Benchmark JSON 读取真实 TTID/TTFD，同时定位对应的
+Perfetto trace 文件。Gradle Console 仅用于错误诊断，不作为性能指标来源。
+Tool 不会自动 suppress DEBUGGABLE、EMULATOR、LOW-BATTERY 或 NOT-PROFILEABLE，
+也不会创建或修改 Benchmark 测试。
 
 ## 最简单的使用流程
 
@@ -59,5 +81,5 @@ cp .env.example .env
 
 所有项目读取和构建工具都绑定最初指定的 Android 项目目录，不能越界访问其他路径。Gradle 输出会在 Tool Layer 中清洗和分类，再交给 LLM 判断，以减少噪音和上下文开销。
 
-V0.2 正在按阶段开发。目前只加入了 ADB 设备发现，尚未实现 adb_install、应用启动、Macrobenchmark 或 Perfetto。
+V0.2.5 已具备执行现有 Macrobenchmark Startup Test、从 Benchmark JSON 读取真实 TTID/TTFD，以及定位对应 Perfetto trace 的能力。当前只收集 trace 文件，不分析 Perfetto；性能判断与后续决策仍交给 LLM。
 项目不使用 RAG、LangChain 或 LangGraph。
