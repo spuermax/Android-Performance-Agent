@@ -31,7 +31,7 @@ Measure → Analyze → Optimize → Verify
 13. 修改后重新执行 Macrobenchmark。
 14. 对比优化前后结果，确认收益和回归风险。
 
-## V0.2.5 能力边界
+## V0.2.6 能力边界
 
 当前可使用：
 
@@ -58,4 +58,4 @@ Measure → Analyze → Optimize → Verify
 - `gradle_build` 返回 `BUILD_TIMEOUT` 时，应表述为“构建超时，结果未知”，不能当作“构建失败”。
 - 构建失败是性能测试的前置阻塞问题。
 - 非 Android 项目应立即停止性能分析。
-- 没有 benchmark module 不等价于项目无法继续，只表示后续可能需要创建/配置 Macrobenchmark 模块。
+- 没有 Macrobenchmark module 时，当前版本不能执行 `run_macrobenchmark`。不得自动修改用户工程创建 Macrobenchmark；普通 Android 项目的零侵入 Measure 方案将在后续版本重新设计。
