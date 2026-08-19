@@ -1,10 +1,442 @@
 # Android Performance Agent
 
-> V0.5.1 开发中
+> 基于 LLM Tool Calling 的 Android 启动性能分析 Agent
+> 自动完成：项目检查 → 构建 → 设备检测 → 安装 → Macrobenchmark → Perfetto → 优化候选 → 源码定位
 
-使用 Python 3.12 + DeepSeek 的 Android 性能分析 Agent，通过 LLM Tool Calling 自主选择并调用工具。
+Android Performance Agent 是一个面向 Android 启动性能分析的本地 Agent 工具。
 
-当前提供：
+你只需要提供一个 Android 项目路径，Agent 会根据真实 Tool Result 自主决定下一步，并自动完成启动性能分析流程。
+
+当前版本聚焦：
+
+**Measure → Analyze → Plan → Locate**
+
+不自动修改业务代码，不自动提交 Git。
+
+---
+
+## 为什么做这个项目
+
+传统 Android 启动性能分析通常需要手动完成：
+
+- 检查工程与构建环境
+- 找 application module / applicationId / Launcher Activity
+- 构建 APK
+- 连接 Android 真机
+- 安装并启动 App
+- 配置和运行 Macrobenchmark
+- 找 Benchmark JSON
+- 找 Perfetto Trace
+- 使用 Perfetto / Trace Processor 分析
+- 判断 Binder / I/O / CPU / 首帧等瓶颈
+- 再回到源码中寻找可能的对应位置
+
+Android Performance Agent 将这些步骤串成一个完整流程：
+
+**Android Project → Agent → Measure → Analyze → Optimization Candidates → Source Localization**
+
+目标不是“让 AI 猜优化建议”，而是让 AI 基于真实性能证据进行分析。
+
+---
+
+## 核心能力
+
+当前支持：
+
+- 自动识别 Android / Gradle 项目
+- 自动识别 application module
+- 自动识别 benchmark module
+- 自动识别 applicationId
+- 自动识别 Launcher Activity
+- 自动执行 Gradle Build
+- 自动检测 ADB 设备
+- 自动安装 APK
+- 自动验证 App 是否能正常启动
+- 自动运行已有 AndroidX Macrobenchmark
+- 普通 Android 项目支持 Standalone Macrobenchmark Harness
+- 自动读取 Benchmark JSON
+- 获取真实 TTID / TTFD
+- 自动收集 Perfetto Trace
+- 使用 Perfetto Trace Processor SQL 分析启动 Trace
+- 分析 First Frame / Binder / I/O / CPU / GC / Application / Activity 等启动阶段
+- 自动生成有证据的 Optimization Candidates
+- 自动定位可能相关的 Java / Kotlin / Manifest 源码位置
+- 输出 HIGH / MEDIUM / LOW Source Match Confidence
+- 无法可靠关联源码时返回 `unresolved`
+- 提供本地 Web UI 展示完整分析过程
+
+---
+
+## 工作流程
+
+完整分析链路：
+
+`Android Project`
+
+→ `Inspect`
+
+→ `Build`
+
+→ `Device`
+
+→ `Install`
+
+→ `Launch`
+
+→ `Measure`
+
+→ `Analyze`
+
+→ `Plan`
+
+→ `Locate`
+
+### Measure
+
+通过 Macrobenchmark 获取：
+
+- TTID
+- TTFD（如果 App 支持）
+- Benchmark JSON
+- Perfetto Trace
+
+### Analyze
+
+使用 Perfetto Trace Processor SQL 提取：
+
+- App Startup 区间
+- First Frame
+- Binder
+- Main Thread I/O
+- Main Thread Running / Runnable
+- GC
+- Application / Activity Startup Stage
+- Dex / Class Loading
+- Top Bottlenecks
+
+### Plan
+
+基于真实 Perfetto 结果生成优化候选。
+
+### Locate
+
+尝试将性能证据映射到：
+
+- Java
+- Kotlin
+- AndroidManifest.xml
+- 文件路径
+- 行号
+- Symbol
+- Confidence
+
+无法可靠定位时返回：
+
+`unresolved`
+
+---
+
+## Evidence First
+
+Android Performance Agent 的核心原则是：
+
+**性能结论必须来自真实 Tool Result。**
+
+规则包括：
+
+- 没有 Benchmark，不报告 TTID / TTFD
+- TTID / TTFD 必须来自 Benchmark JSON
+- 没有 Perfetto Trace，不生成 Trace 级性能结论
+- LLM 不直接读取 Perfetto 二进制文件
+- Raw Slice 可能嵌套或重叠，不能直接累加
+- Bottleneck 排名使用 exclusive startup attribution
+- Source Match HIGH 不等于 Performance Severity HIGH
+- LOW / MEDIUM 只能作为源码候选
+- 找不到可靠源码映射时返回 `unresolved`
+- Trace health warning 必须保留并披露
+- 不根据常见 Android API 或生命周期名称猜测根因
+
+Perfetto 分析链路：
+
+`Perfetto Trace`
+
+→ `Trace Processor SQL`
+
+→ `Structured Tool Result`
+
+→ `LLM`
+
+---
+
+## Standalone Macrobenchmark
+
+普通 Android 项目通常没有 Macrobenchmark module。
+
+Android Performance Agent 内置 Standalone Macrobenchmark Harness，可以在：
+
+**不修改目标项目源码**
+
+**不修改 settings.gradle**
+
+**不修改业务 Gradle**
+
+**不修改 AndroidManifest.xml**
+
+**不引用目标项目源码**
+
+的情况下，对已经安装的 App 进行启动性能测量。
+
+Harness 通过运行时 `targetPackage` 指定目标应用。
+
+### PoC 结果
+
+真实物理设备验证：
+
+- Internal Macrobenchmark median：`308.227 ms`
+- Standalone Macrobenchmark median：`308.734 ms`
+- 差异：`+0.164%`
+- 4 rounds
+- 20 iterations
+- 20 Perfetto traces
+- 目标项目源码修改：`0`
+
+因此普通 Android 项目也可以直接进入启动性能 Measure 阶段。
+
+---
+
+# 环境要求
+
+| 环境 | 要求 |
+|---|---|
+| OS | macOS / Linux 推荐 |
+| Python | **3.12** |
+| Java | **JDK 17 推荐** |
+| Android SDK | 必须 |
+| ADB | 必须 |
+| Android Device | 推荐真实设备 |
+| USB Debugging | 必须 |
+| Perfetto Trace Processor | Analyze 阶段必须 |
+| DeepSeek API Key | 必须 |
+| Android Studio | 非强制，但推荐 |
+
+### Python 3.12
+
+检查：
+
+`python3.12 --version`
+
+项目的 `setup.sh` 会自动创建 `.venv`、升级 pip 并安装 `requirements.txt`。
+
+### Java
+
+推荐使用 JDK 17。
+
+检查：
+
+`java -version`
+
+### Android SDK / ADB
+
+推荐安装 Android Studio，并通过 Android Studio 安装 Android SDK、Platform Tools、Build Tools。
+
+检查：
+
+`adb version`
+
+连接设备：
+
+`adb devices`
+
+如果显示 `unauthorized`，请在手机上确认 USB 调试授权。
+
+部分 Xiaomi / MIUI 设备还需要额外开启“开发者选项 → USB 安装”，否则可能出现：
+
+`INSTALL_FAILED_USER_RESTRICTED`
+
+### Perfetto Trace Processor
+
+完整 Analyze 阶段需要：
+
+`trace_processor`
+
+或：
+
+`trace_processor_shell`
+
+如果不在 PATH，可配置：
+
+`TRACE_PROCESSOR_SHELL=/path/to/trace_processor`
+
+### DeepSeek API Key
+
+复制配置：
+
+`cp .env.example .env`
+
+然后编辑 `.env`：
+
+`DEEPSEEK_API_KEY=your_api_key`
+
+`.env` 不应提交到 Git 仓库。
+
+---
+
+# Quick Start
+
+### 1. Clone
+
+`git clone https://github.com/spuermax/Android-Performance-Agent.git`
+
+`cd Android-Performance-Agent`
+
+### 2. 初始化环境
+
+如果脚本没有执行权限：
+
+`chmod +x setup.sh run.sh web.sh test.sh`
+
+然后：
+
+`./setup.sh`
+
+### 3. 配置 DeepSeek
+
+`cp .env.example .env`
+
+填写：
+
+`DEEPSEEK_API_KEY`
+
+### 4. 连接 Android 设备
+
+`adb devices`
+
+确保至少有一台设备状态为：
+
+`device`
+
+正式性能测试推荐使用真实物理设备。
+
+### 5. 启动 Web UI
+
+`./web.sh`
+
+浏览器默认打开：
+
+`http://127.0.0.1:8765`
+
+在页面中填写 Android 项目路径，例如：
+
+`/Users/yourname/projects/MyAndroidApp`
+
+选择：
+
+**完整启动分析**
+
+然后点击：
+
+**开始执行**
+
+---
+
+# Web UI
+
+当前 Web UI 使用结构化 Agent Event，不依赖从终端日志中猜测性能数据。
+
+页面主要包含：
+
+- Project
+- Device
+- Measure
+- Analyze
+- Plan
+- Locate
+- Final Result
+- Agent Log
+
+结构：
+
+`Agent`
+
+→ `tool_started`
+
+→ `tool_result`
+
+→ Structured Event
+
+→ Python Web Backend
+
+→ Dashboard
+
+---
+
+# CLI 使用
+
+也可以直接使用命令行：
+
+`./run.sh "/path/to/android/project"`
+
+指定任务：
+
+`./run.sh "/path/to/android/project" --task "执行完整启动性能分析" --max-steps 15`
+
+运行测试：
+
+`./test.sh`
+
+---
+
+# 真实设备运行结果
+
+项目已经在真实 Android 物理设备上完成完整 E2E 验证。
+
+测试环境：
+
+- Device：Xiaomi M2102K1AC
+- Android：14
+- SDK：34
+- ABI：arm64-v8a
+- Target：`com.sample.redex`
+
+Macrobenchmark：
+
+- Startup Mode：COLD
+- Runs：5
+- TTID Min：`272.1 ms`
+- TTID Median：`284.8 ms`
+- TTID Max：`499.9 ms`
+- TTFD：本轮不可用
+
+Perfetto Startup：
+
+- Startup Duration：`289.996 ms`
+- First Frame：`68.8 ms`
+- Binder：`41.9 ms`
+- Main Thread I/O：`37.8 ms`
+- Launch Delay：`30.8 ms`
+- Main Thread Running：`25.9 ms`
+- GC overlap：`0 ms`
+
+Source Localization：
+
+- `MainActivity`：HIGH Source Match
+- `MainActivity#onCreate / setContentView`：MEDIUM Candidate
+- `SampleApplication`：MEDIUM / LOW Candidate
+- Binder：unresolved
+- Main Thread I/O：unresolved
+- CPU Scheduling：unresolved
+
+该轮完整执行：
+
+**Inspect → Build → Device → Install → Launch → Measure → Analyze → Plan → Locate**
+
+全部成功。
+
+---
+
+# 主要 Tools
+
+当前 Tool Registry 包含：
 
 - `inspect_project`
 - `gradle_build`
@@ -14,135 +446,115 @@
 - `inspect_app_target`
 - `adb_install`
 - `adb_launch_app`
-- `run_macrobenchmark`
 - `inspect_benchmark_readiness`
+- `run_macrobenchmark`
 - `run_standalone_macrobenchmark`
 - `analyze_perfetto_trace`
 - `generate_startup_optimization_plan`
 - `locate_startup_bottleneck_source`
-- Android module 类型识别
-- DeepSeek Agent Loop
 
-`adb_devices` 可以检查本机 ADB 环境，以及 Android 真机和模拟器的连接状态，
-为 Macrobenchmark 自动执行做准备。
+Tool 负责真实事实提取。
 
-`inspect_app_target` 可以识别后续 Macrobenchmark 要测试的 application module、
-显式 applicationId 和 Launcher Activity。当前默认静态分析 `debug` variant；
-product flavors 仍可能需要后续通过构建产物或 ADB 确认。
+LLM 负责决定下一步、解释 Tool Result、组织最终分析结论。
 
-`adb_install` 可以把项目目录内已经构建好的 APK 安装到显式指定的在线设备。
-它不会自动选择设备或触发 Build；`gradle_build` 在 assemble 成功后会返回匹配的
-`apk_outputs`，存在多个 APK 时全部返回，由 Agent 决定下一步并要求明确目标。
+项目不是固定 Workflow，也不依赖 LangChain / LangGraph。
 
-`adb_launch_app` 会在显式指定的设备上验证 package 已安装、Launcher Component
-可以启动且目标进程存在。它只做 Launch Verification；不会 force-stop，也不会把
-`am start -W` 的时间字段作为 TTID、TTFD 或正式启动性能数据。
+---
 
-`run_macrobenchmark` 可以运行项目中已经存在的 AndroidX Macrobenchmark Startup
-Test，并只从本轮生成的 Benchmark JSON 读取真实 TTID/TTFD，同时定位对应的
-Perfetto trace 文件。Gradle Console 仅用于错误诊断，不作为性能指标来源。
-Tool 不会自动 suppress DEBUGGABLE、EMULATOR、LOW-BATTERY 或 NOT-PROFILEABLE，
-也不会创建或修改 Benchmark 测试。
+# 架构
 
-`inspect_benchmark_readiness` 会检查指定设备上实际安装的目标 APK 是否为
-non-debuggable、是否支持 profileable by shell，以及当前 COLD Macrobenchmark 所需的
-ProfileInstaller 条件。它检查的是设备中的 APK，不根据源码或 Gradle 配置猜测。
+`Browser / CLI`
 
-对于本身没有 Macrobenchmark module 的普通 Android 项目，
-`run_standalone_macrobenchmark` 可以使用 Agent 自带的独立 self-instrumenting Harness，
-通过运行时 `targetPackage` 测量已经安装的目标 App。Harness 不引用目标项目源码，
-不会修改目标项目的 settings、build 文件、Manifest 或业务代码。正式 TTID/TTFD
-仍只读取本轮 Benchmark JSON，并同时收集本轮 Perfetto trace。
+→ `AndroidPerformanceAgent`
 
-`analyze_perfetto_trace` 使用官方 Perfetto Trace Processor SQL 分析单个启动
-Trace，返回 App Startup 区间、主线程长 Slice、Binder、I/O、GC、CPU
-调度、首帧阶段和排序后的瓶颈事实。Tool 不会让 LLM 直接读取原始
-二进制 Trace，也不在 Tool 内生成优化建议。运行前需要在 `PATH` 中安装
-`trace_processor_shell`/`trace_processor`，或配置 `TRACE_PROCESSOR_SHELL`。
-Tool 必须同时接收 Macrobenchmark 返回的目标 `package_name`，SQL 只分析
-该 package 的 Startup；找不到或出现多个目标 Startup 时会停止，不会猜测。
-GC 输出的 `total_wall_overlap_ms` 是 GC wall duration 与启动区间的重叠，
-不表示 Stop-The-World pause。
+→ `LLM`
 
-`generate_startup_optimization_plan` 只消费成功的 `analyze_perfetto_trace`
-结构化结果，根据 Application/Provider、I/O、Binder、GC wall overlap、
-CPU、主线程长 Slice 和 Dex/Class 等真实证据生成带优先级的优化候选。
-统一最低证据阈值为 `impact_ms >= 3` 或占 Startup `>= 1%`；
-未达阈值时不会生成泛化建议。Tool 不修改代码、不生成
-Baseline/Startup Profile，也不执行重新测量。
+→ `Tool Registry`
 
-`locate_startup_bottleneck_source` 根据 V0.4 优化候选携带的真实 evidence，
-在指定 application module 内定位可能相关的 Java/Kotlin 源码与 Manifest 配置。
-结果包含文件、行号、符号、置信度和关联原因；无法可靠关联时返回 `unresolved`，
-不会因为项目中存在 `Application.onCreate` 或常见 API 就断言它是瓶颈。
-Tool 复用受项目路径约束的文本搜索与文件读取能力，只读且不访问项目目录外文件。
+→ `Android / Gradle / ADB / Macrobenchmark / Perfetto Tools`
 
-V0.5.1 收紧了 Perfetto evidence 语义：瓶颈排名以
-`android_startup_opinionated_breakdown` 的 exclusive 启动归因为准。
-`android_thread_slices_for_all_startups` 提取的 raw Slice 可能互相嵌套或重叠，
-仅作为源码定位线索，禁止累加，也不进入独立瓶颈排名。`bindApplication` raw
-父 Slice 不等于业务 `Application.onCreate` 耗时；没有类级 Trace 证据时，
-只能定位为 App binding/Application 启动路径候选。源码候选按
-`category + file_path + symbol` 聚合，并保留 `matched_lines`。
-Raw hint 除保留最长 Slice 外，还会优先保留包含 package/class/method 标识符的
-Slice，避免源码定位证据因时长排序被截断。Trace Processor 报告的 health issue
-会结构化输出为 `trace_health` 与 `trace_health_issues`；WARNING 不会直接令分析
-失败，但 Agent 必须在结论中披露。
+→ `Structured Tool Result`
 
-## 最简单的使用流程
+→ `LLM`
 
-需要预先安装 Python 3.12。
+→ `Final Report`
 
-第一次运行：
+---
 
-```bash
-./setup.sh
-```
+# 当前能力边界
 
-根据示例创建配置，并填写自己的 DeepSeek API Key：
+当前版本聚焦：
 
-```bash
-cp .env.example .env
-```
+**Android Startup Performance**
 
-`.env` 已加入 `.gitignore`，禁止提交 API Key。
+当前不做：
 
-以后运行：
+- 自动修改业务代码
+- 自动提交 Git
+- 自动创建 PR
+- 自动声称某个候选源码一定是根因
+- 在没有 Benchmark 时生成启动耗时
+- 在没有 Trace 时生成 Perfetto 级性能结论
 
-```bash
-./run.sh "/Android项目路径"
-```
+其他限制：
 
-也可以启动本地 Web UI：
+- TTFD 依赖 App 是否提供 fully drawn 信号
+- Product Flavor 支持仍有限
+- Binder / I/O 不一定能可靠定位具体业务源码
+- Trace Processor health warning 会保留并披露
+- 正式性能数据推荐在物理设备上采集
 
-```bash
-./web.sh
-```
+---
 
-浏览器默认打开 `http://127.0.0.1:8765`。Web UI 仍通过 `run.sh` 使用同一套
-Agent Loop 与 Tool Registry，不会改成固定 Workflow。详细说明见
-[`README_WEB_UI_V0.2.md`](README_WEB_UI_V0.2.md)。
+# Roadmap
 
-执行全部单元测试：
+已完成：
 
-```bash
-./test.sh
-```
+- Project Inspection
+- Gradle Build
+- ADB Device Detection
+- APK Install / Launch Verification
+- Existing Macrobenchmark
+- Standalone Macrobenchmark Harness
+- Benchmark JSON Parsing
+- TTID / TTFD
+- Perfetto Trace Processor Analysis
+- Evidence-based Optimization Plan
+- Startup Source Localization
+- Structured Web UI
 
-也可以透传 `main.py` 的其他参数：
+后续方向：
 
-```bash
-./run.sh "/Android项目路径" --task "检查构建失败原因" --max-steps 6
-```
+- 更好的 Binder Source Attribution
+- 更好的 Main Thread I/O Source Attribution
+- 多轮 Benchmark 对比
+- Before / After Report
+- 报告导出
+- 更多 Android 项目结构兼容
+- Memory / Jank 等其他性能分析模块
 
-## 架构说明
+---
 
-本项目保持 Tool-Using Agent 架构，不是固定 Workflow。每一轮由 LLM 根据用户目标、上下文和 Tool 描述决定调用哪个 Tool，或直接给出最终结论。
+# 项目原则
 
-所有项目读取和构建工具都绑定最初指定的 Android 项目目录，不能越界访问其他路径。Gradle 输出会在 Tool Layer 中清洗和分类，再交给 LLM 判断，以减少噪音和上下文开销。
+这个项目不会把：
 
-V0.5.1 在 Perfetto Startup 事实和结构化优化候选之上增加源码位置候选，
-并明确区分 exclusive 排名数据与 raw 定位数据。
-Tool 负责事实提取、证据映射和只读源码定位，最终解释与方案取舍仍由 LLM 决定；
-本版本不会自动修改或提交业务代码，也不执行 Before/After。
-项目不使用 RAG、LangChain 或 LangGraph。
+> “AI 觉得这里可能慢”
+
+当作性能结论。
+
+它更关注：
+
+> “真实 Benchmark 和 Perfetto 证据告诉我们哪里值得继续调查。”
+
+因此：
+
+**No Measurement → No Performance Claim**
+
+**No Reliable Source Evidence → Unresolved**
+
+---
+
+## License
+
+请根据仓库最终选择的开源协议补充 License。
