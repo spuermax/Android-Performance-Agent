@@ -92,6 +92,11 @@ class SearchProjectTextTool(BaseTool):
                 scanned_files += 1
 
                 try:
+                    path.resolve().relative_to(project)
+                except (OSError, ValueError):
+                    continue
+
+                try:
                     content = path.read_text(encoding="utf-8", errors="replace")
                 except OSError:
                     continue

@@ -18,13 +18,14 @@ from tools.perfetto_analysis_tool import AnalyzePerfettoTraceTool
 from tools.project_tool import InspectProjectTool
 from tools.registry import ToolRegistry
 from tools.search_tool import SearchProjectTextTool
+from tools.startup_source_locator_tool import LocateStartupBottleneckSourceTool
 from tools.startup_optimization_tool import GenerateStartupOptimizationPlanTool
 from tools.standalone_macrobenchmark_tool import RunStandaloneMacrobenchmarkTool
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Android Performance Agent V0.4 - minimal Tool Calling agent."
+        description="Android Performance Agent V0.5 - minimal Tool Calling agent."
     )
     parser.add_argument("project_path", help="Path to the Android Gradle project.")
     parser.add_argument(
@@ -67,6 +68,9 @@ def main() -> int:
     registry.register(AnalyzePerfettoTraceTool(allowed_project_path=project_path))
     registry.register(
         GenerateStartupOptimizationPlanTool(allowed_project_path=project_path)
+    )
+    registry.register(
+        LocateStartupBottleneckSourceTool(allowed_project_path=project_path)
     )
 
     try:

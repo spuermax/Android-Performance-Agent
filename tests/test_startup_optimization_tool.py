@@ -77,6 +77,41 @@ def test_optimization_content_provider(tmp_path: Path) -> None:
     assert "Auto Init" in result["recommendations"][0]["suggestion"]
 
 
+def test_optimization_skips_detected_initialization_below_evidence_threshold(
+    tmp_path: Path,
+) -> None:
+    analysis = base_analysis()
+    analysis["application_initialization"] = {
+        "detected": True,
+        "slices": [],
+    }
+    analysis["content_provider_initialization"] = {
+        "detected": True,
+        "slices": [{"name": "SmallProvider", "duration_ms": 1.0}],
+    }
+
+    result = execute(tmp_path, analysis)
+
+    assert result["recommendations"] == []
+
+
+def test_optimization_accepts_one_percent_evidence_threshold(
+    tmp_path: Path,
+) -> None:
+    analysis = base_analysis()
+    analysis["startup_duration_ms"] = 100.0
+    analysis["content_provider_initialization"] = {
+        "detected": True,
+        "slices": [{"name": "Provider", "duration_ms": 1.0}],
+    }
+
+    result = execute(tmp_path, analysis)
+
+    assert categories(result) == ["CONTENT_PROVIDER_INITIALIZATION"]
+    assert result["evidence_threshold"]["minimum_impact_ms"] == 3.0
+    assert result["evidence_threshold"]["minimum_startup_percentage"] == 1.0
+
+
 def test_optimization_main_thread_io(tmp_path: Path) -> None:
     analysis = base_analysis()
     analysis["io"] = {"total_blocking_ms": 35.0, "event_count": 12}
@@ -168,6 +203,19 @@ def test_optimization_dex_and_class(tmp_path: Path) -> None:
     assert "V0.4 不生成 Profile" in recommendation["suggestion"]
 
 
+def test_optimization_skips_dex_class_below_evidence_threshold(
+    tmp_path: Path,
+) -> None:
+    analysis = base_analysis()
+    analysis["startup_stages"] = [
+        {"stage": "open_dex_files_from_oat", "duration_ms": 1.0, "event_count": 1}
+    ]
+
+    result = execute(tmp_path, analysis)
+
+    assert "DEX_CLASS_LOADING" not in categories(result)
+
+
 def test_optimization_uses_top_bottleneck_when_stage_is_absent(
     tmp_path: Path,
 ) -> None:
@@ -208,14 +256,12 @@ def test_optimization_sorts_multiple_bottlenecks_by_evidence(
     assert [item["category"] for item in result["priority_order"]] == [
         "MAIN_THREAD_IO",
         "BINDER_IPC",
-        "CONTENT_PROVIDER_INITIALIZATION",
     ]
     assert [item["severity"] for item in result["priority_order"]] == [
         "HIGH",
         "MEDIUM",
-        "LOW",
     ]
-    assert len(result["verification_plan"]) == 3
+    assert len(result["verification_plan"]) == 2
 
 
 def test_optimization_returns_no_generic_advice_without_evidence(

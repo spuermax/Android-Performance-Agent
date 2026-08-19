@@ -14,6 +14,8 @@ class GenerateStartupOptimizationPlanTool(BaseTool):
     )
 
     SEVERITY_ORDER = {"HIGH": 3, "MEDIUM": 2, "LOW": 1}
+    MIN_EVIDENCE_IMPACT_MS = 3.0
+    MIN_EVIDENCE_STARTUP_PERCENTAGE = 1.0
 
     @property
     def parameters_schema(self) -> dict[str, Any]:
@@ -108,6 +110,13 @@ class GenerateStartupOptimizationPlanTool(BaseTool):
             "recommendations": recommendations,
             "priority_order": priority_order,
             "verification_plan": verification_plan,
+            "evidence_threshold": {
+                "minimum_impact_ms": self.MIN_EVIDENCE_IMPACT_MS,
+                "minimum_startup_percentage": (
+                    self.MIN_EVIDENCE_STARTUP_PERCENTAGE
+                ),
+                "rule": "impact_ms >= 3 OR percentage_of_startup >= 1%",
+            },
             "error_type": None,
             "summary": summary,
         }
@@ -148,6 +157,8 @@ class GenerateStartupOptimizationPlanTool(BaseTool):
             return
         slices = cls._valid_slices(data.get("slices"))
         impact_ms = max((item["duration_ms"] for item in slices), default=0.0)
+        if not cls._meets_min_evidence(impact_ms, startup_ms):
+            return
         severity = cls._severity(impact_ms, startup_ms, high_ms=30, medium_ms=10)
         evidence = cls._slice_evidence("Application 初始化 Slice", slices)
         cls._append(
@@ -180,6 +191,8 @@ class GenerateStartupOptimizationPlanTool(BaseTool):
             return
         slices = cls._valid_slices(data.get("slices"))
         impact_ms = sum(item["duration_ms"] for item in slices)
+        if not cls._meets_min_evidence(impact_ms, startup_ms):
+            return
         severity = cls._severity(impact_ms, startup_ms, high_ms=20, medium_ms=5)
         cls._append(
             output,
@@ -208,7 +221,7 @@ class GenerateStartupOptimizationPlanTool(BaseTool):
     ) -> None:
         data = analysis["io"]
         impact_ms = cls._number(data.get("total_blocking_ms"))
-        if impact_ms < 3:
+        if not cls._meets_min_evidence(impact_ms, startup_ms):
             return
         cls._append(
             output,
@@ -240,7 +253,7 @@ class GenerateStartupOptimizationPlanTool(BaseTool):
     ) -> None:
         data = analysis["binder"]
         impact_ms = cls._number(data.get("total_blocking_ms"))
-        if impact_ms < 5:
+        if not cls._meets_min_evidence(impact_ms, startup_ms):
             return
         top_slices = cls._valid_slices(data.get("top_slices"))
         detail = cls._slice_evidence("最长 Binder Slice", top_slices[:3])
@@ -275,7 +288,7 @@ class GenerateStartupOptimizationPlanTool(BaseTool):
         data = analysis["gc"]
         impact_ms = cls._number(data.get("total_wall_overlap_ms"))
         event_count = cls._integer(data.get("event_count"))
-        if impact_ms <= 0 or event_count <= 0:
+        if event_count <= 0 or not cls._meets_min_evidence(impact_ms, startup_ms):
             return
         cls._append(
             output,
@@ -312,7 +325,7 @@ class GenerateStartupOptimizationPlanTool(BaseTool):
         running_ms = cls._number(data.get("main_thread_running_ms"))
         runnable_ms = cls._number(data.get("main_thread_runnable_ms"))
         impact_ms = running_ms + runnable_ms
-        if running_ms < 10 and runnable_ms < 5:
+        if not cls._meets_min_evidence(impact_ms, startup_ms):
             return
         cls._append(
             output,
@@ -347,7 +360,7 @@ class GenerateStartupOptimizationPlanTool(BaseTool):
         if not slices:
             return
         longest_ms = max(item["duration_ms"] for item in slices)
-        if longest_ms < 5:
+        if not cls._meets_min_evidence(longest_ms, startup_ms):
             return
         cls._append(
             output,
@@ -382,6 +395,8 @@ class GenerateStartupOptimizationPlanTool(BaseTool):
         if not matched:
             return
         impact_ms = sum(metric["duration_ms"] for metric in matched)
+        if not cls._meets_min_evidence(impact_ms, startup_ms):
+            return
         evidence = ", ".join(
             f"{metric['reason']} {metric['duration_ms']:.3f} ms"
             for metric in matched
@@ -415,7 +430,7 @@ class GenerateStartupOptimizationPlanTool(BaseTool):
         if frame is None:
             return
         impact_ms = frame["duration_ms"]
-        if impact_ms < 5:
+        if not cls._meets_min_evidence(impact_ms, startup_ms):
             return
         cls._append(
             output,
@@ -501,6 +516,18 @@ class GenerateStartupOptimizationPlanTool(BaseTool):
         return "LOW"
 
     @classmethod
+    def _meets_min_evidence(
+        cls,
+        impact_ms: float,
+        startup_ms: float,
+    ) -> bool:
+        percentage = impact_ms * 100 / startup_ms if startup_ms > 0 else 0
+        return (
+            impact_ms >= cls.MIN_EVIDENCE_IMPACT_MS
+            or percentage >= cls.MIN_EVIDENCE_STARTUP_PERCENTAGE
+        )
+
+    @classmethod
     def _valid_slices(cls, value: Any) -> list[dict[str, Any]]:
         if not isinstance(value, list):
             return []
@@ -581,6 +608,16 @@ class GenerateStartupOptimizationPlanTool(BaseTool):
             "recommendations": [],
             "priority_order": [],
             "verification_plan": [],
+            "evidence_threshold": {
+                "minimum_impact_ms": (
+                    GenerateStartupOptimizationPlanTool.MIN_EVIDENCE_IMPACT_MS
+                ),
+                "minimum_startup_percentage": (
+                    GenerateStartupOptimizationPlanTool
+                    .MIN_EVIDENCE_STARTUP_PERCENTAGE
+                ),
+                "rule": "impact_ms >= 3 OR percentage_of_startup >= 1%",
+            },
             "error_type": error_type,
             "summary": summary,
         }

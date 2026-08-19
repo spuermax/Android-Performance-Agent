@@ -1,6 +1,6 @@
 # Android Performance Agent
 
-> V0.4 开发中
+> V0.5 开发中
 
 使用 Python 3.12 + DeepSeek 的 Android 性能分析 Agent，通过 LLM Tool Calling 自主选择并调用工具。
 
@@ -19,6 +19,7 @@
 - `run_standalone_macrobenchmark`
 - `analyze_perfetto_trace`
 - `generate_startup_optimization_plan`
+- `locate_startup_bottleneck_source`
 - Android module 类型识别
 - DeepSeek Agent Loop
 
@@ -66,8 +67,15 @@ GC 输出的 `total_wall_overlap_ms` 是 GC wall duration 与启动区间的重�
 `generate_startup_optimization_plan` 只消费成功的 `analyze_perfetto_trace`
 结构化结果，根据 Application/Provider、I/O、Binder、GC wall overlap、
 CPU、主线程长 Slice 和 Dex/Class 等真实证据生成带优先级的优化候选。
-没有达到证据阈值时不会生成泛化建议。Tool 不修改代码、不生成
+统一最低证据阈值为 `impact_ms >= 3` 或占 Startup `>= 1%`；
+未达阈值时不会生成泛化建议。Tool 不修改代码、不生成
 Baseline/Startup Profile，也不执行重新测量。
+
+`locate_startup_bottleneck_source` 根据 V0.4 优化候选携带的真实 evidence，
+在指定 application module 内定位可能相关的 Java/Kotlin 源码与 Manifest 配置。
+结果包含文件、行号、符号、置信度和关联原因；无法可靠关联时返回 `unresolved`，
+不会因为项目中存在 `Application.onCreate` 或常见 API 就断言它是瓶颈。
+Tool 复用受项目路径约束的文本搜索与文件读取能力，只读且不访问项目目录外文件。
 
 ## 最简单的使用流程
 
@@ -111,7 +119,7 @@ cp .env.example .env
 
 所有项目读取和构建工具都绑定最初指定的 Android 项目目录，不能越界访问其他路径。Gradle 输出会在 Tool Layer 中清洗和分类，再交给 LLM 判断，以减少噪音和上下文开销。
 
-V0.4 在 Perfetto Startup 事实提取之上增加了结构化优化候选。
-Tool 负责证据映射和优先级，最终解释与方案取舍仍由 LLM 决定；
-本版本不会自动修改业务代码或执行 Before/After。
+V0.5 在 Perfetto Startup 事实和结构化优化候选之上增加源码位置候选。
+Tool 负责事实提取、证据映射和只读源码定位，最终解释与方案取舍仍由 LLM 决定；
+本版本不会自动修改或提交业务代码，也不执行 Before/After。
 项目不使用 RAG、LangChain 或 LangGraph。
