@@ -84,8 +84,10 @@ def validate_run_payload(body: Any) -> tuple[str, str, int]:
     if not isinstance(body, dict):
         raise RequestValidationError("JSON 请求体必须是对象")
 
-    project_path = str(body.get("project_path", "")).strip()
+    project_path = str(body.get("project_path") or "").strip()
     task = str(body.get("task", "")).strip()
+    if not project_path:
+        raise RequestValidationError("项目路径不能为空")
     if len(project_path) > 4_096:
         raise RequestValidationError("项目路径过长")
     project = Path(project_path).expanduser()

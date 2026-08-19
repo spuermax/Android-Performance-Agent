@@ -42,6 +42,18 @@ def test_validate_run_payload(tmp_path: Path) -> None:
     assert max_steps == 15
 
 
+@pytest.mark.parametrize("value", ["", "   ", None])
+def test_validate_run_payload_rejects_empty_project_path(value: object) -> None:
+    with pytest.raises(web_app.RequestValidationError, match="项目路径不能为空"):
+        web_app.validate_run_payload(
+            {
+                "project_path": value,
+                "task": "test",
+                "max_steps": 15,
+            }
+        )
+
+
 @pytest.mark.parametrize("value", ["abc", True, 1.5, 0, 51])
 def test_validate_run_payload_rejects_invalid_max_steps(
     tmp_path: Path,
