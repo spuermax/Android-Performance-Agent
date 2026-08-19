@@ -1,6 +1,6 @@
 # Android Performance Agent
 
-> V0.2.6 开发中
+> V0.2.7 开发中
 
 使用 Python 3.12 + DeepSeek 的 Android 性能分析 Agent，通过 LLM Tool Calling 自主选择并调用工具。
 
@@ -15,6 +15,8 @@
 - `adb_install`
 - `adb_launch_app`
 - `run_macrobenchmark`
+- `inspect_benchmark_readiness`
+- `run_standalone_macrobenchmark`
 - Android module 类型识别
 - DeepSeek Agent Loop
 
@@ -38,6 +40,16 @@ Test，并只从本轮生成的 Benchmark JSON 读取真实 TTID/TTFD，同时�
 Perfetto trace 文件。Gradle Console 仅用于错误诊断，不作为性能指标来源。
 Tool 不会自动 suppress DEBUGGABLE、EMULATOR、LOW-BATTERY 或 NOT-PROFILEABLE，
 也不会创建或修改 Benchmark 测试。
+
+`inspect_benchmark_readiness` 会检查指定设备上实际安装的目标 APK 是否为
+non-debuggable、是否支持 profileable by shell，以及当前 COLD Macrobenchmark 所需的
+ProfileInstaller 条件。它检查的是设备中的 APK，不根据源码或 Gradle 配置猜测。
+
+对于本身没有 Macrobenchmark module 的普通 Android 项目，
+`run_standalone_macrobenchmark` 可以使用 Agent 自带的独立 self-instrumenting Harness，
+通过运行时 `targetPackage` 测量已经安装的目标 App。Harness 不引用目标项目源码，
+不会修改目标项目的 settings、build 文件、Manifest 或业务代码。正式 TTID/TTFD
+仍只读取本轮 Benchmark JSON，并同时收集本轮 Perfetto trace。
 
 ## 最简单的使用流程
 
@@ -81,5 +93,5 @@ cp .env.example .env
 
 所有项目读取和构建工具都绑定最初指定的 Android 项目目录，不能越界访问其他路径。Gradle 输出会在 Tool Layer 中清洗和分类，再交给 LLM 判断，以减少噪音和上下文开销。
 
-V0.2.6 已具备执行现有 Macrobenchmark Startup Test、从 Benchmark JSON 读取真实 TTID/TTFD，以及定位对应 Perfetto trace 的能力。当前只收集 trace 文件，不分析 Perfetto；性能判断与后续决策仍交给 LLM。
+V0.2.7 已同时支持项目内已有 Macrobenchmark 和 Agent 自带的 Standalone Macrobenchmark Harness，可从 Benchmark JSON 读取真实 TTID/TTFD，并定位对应 Perfetto trace。当前只收集 trace 文件，不分析 Perfetto；性能判断与后续决策仍交给 LLM。
 项目不使用 RAG、LangChain 或 LangGraph。
