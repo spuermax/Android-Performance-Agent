@@ -25,6 +25,10 @@ def create_tool(tmp_path: Path) -> AnalyzePerfettoTraceTool:
     return AnalyzePerfettoTraceTool(allowed_project_path=tmp_path)
 
 
+def arguments(trace: Path, package_name: str = "com.example.app") -> dict[str, str]:
+    return {"trace_file": str(trace), "package_name": package_name}
+
+
 def completed(
     stdout: str = "",
     returncode: int = 0,
@@ -40,6 +44,7 @@ def completed(
 
 def normal_csv() -> str:
     return CSV_HEADER + """\
+"trace_meta","com.example.app",,1,"[NULL]","[NULL]",1
 "startup","com.example.app",308.5,1,"[NULL]","cold",51
 "main_thread","com.example.app",,"1234",1234,"735",0
 "breakdown","choreographer_do_frame",90.0,10,"[NULL]","[NULL]",1
@@ -77,7 +82,7 @@ def mock_processor(monkeypatch, stdout: str, *, returncode: int = 0):
 
 def test_perfetto_reports_missing_trace(tmp_path: Path) -> None:
     result = create_tool(tmp_path).execute(
-        {"trace_file": str(tmp_path / "missing.perfetto-trace")}
+        arguments(tmp_path / "missing.perfetto-trace")
     )
 
     assert result["error_type"] == "TRACE_FILE_NOT_FOUND"
@@ -94,7 +99,7 @@ def test_perfetto_reports_missing_trace_processor(
         staticmethod(lambda: None),
     )
 
-    result = create_tool(tmp_path).execute({"trace_file": str(trace)})
+    result = create_tool(tmp_path).execute(arguments(trace))
 
     assert result["error_type"] == "TRACE_PROCESSOR_NOT_FOUND"
 
@@ -103,7 +108,7 @@ def test_perfetto_reports_sql_failure(monkeypatch, tmp_path: Path) -> None:
     trace = create_trace(tmp_path)
     mock_processor(monkeypatch, "", returncode=1)
 
-    result = create_tool(tmp_path).execute({"trace_file": str(trace)})
+    result = create_tool(tmp_path).execute(arguments(trace))
 
     assert result["error_type"] == "TRACE_PROCESSOR_SQL_FAILED"
     assert result["important_logs"] == ["SQL error"]
@@ -116,7 +121,7 @@ def test_perfetto_reports_non_android_startup_trace(
     trace = create_trace(tmp_path)
     mock_processor(monkeypatch, CSV_HEADER)
 
-    result = create_tool(tmp_path).execute({"trace_file": str(trace)})
+    result = create_tool(tmp_path).execute(arguments(trace))
 
     assert result["error_type"] == "ANDROID_STARTUP_NOT_FOUND"
 
@@ -128,7 +133,7 @@ def test_perfetto_parses_startup_and_structured_bottlenecks(
     trace = create_trace(tmp_path)
     calls = mock_processor(monkeypatch, normal_csv())
 
-    result = create_tool(tmp_path).execute({"trace_file": str(trace)})
+    result = create_tool(tmp_path).execute(arguments(trace))
 
     assert result["success"] is True
     assert result["package_name"] == "com.example.app"
@@ -140,6 +145,8 @@ def test_perfetto_parses_startup_and_structured_bottlenecks(
     assert result["binder"]["top_slices"][0]["duration_ms"] == 8.0
     assert result["io"]["total_blocking_ms"] == 30.0
     assert result["gc"]["event_count"] == 1
+    assert result["gc"]["total_wall_overlap_ms"] == 4.0
+    assert result["gc"]["events"][0]["wall_overlap_ms"] == 4.0
     assert result["cpu"]["app_process_running_ms"] == 180.0
     assert result["application_initialization"]["detected"] is True
     assert result["content_provider_initialization"]["detected"] is True
@@ -147,6 +154,7 @@ def test_perfetto_parses_startup_and_structured_bottlenecks(
     assert calls[0][0][0] == str(PROCESSOR)
     assert calls[0][0][1] == "query"
     assert "android.startup.startups" in calls[0][0][3]
+    assert "WHERE package = 'com.example.app'" in calls[0][0][3]
     assert calls[0][1]["shell"] is False
     assert calls[0][1]["timeout"] == 120
 
@@ -158,7 +166,7 @@ def test_perfetto_rejects_trace_outside_allowed_roots(tmp_path: Path) -> None:
     outside.write_bytes(b"trace")
 
     with pytest.raises(ToolError, match="\u62d2\u7edd\u8bbf\u95ee"):
-        create_tool(allowed).execute({"trace_file": str(outside)})
+        create_tool(allowed).execute(arguments(outside))
 
 
 def test_perfetto_validates_trace_suffix(tmp_path: Path) -> None:
@@ -166,4 +174,42 @@ def test_perfetto_validates_trace_suffix(tmp_path: Path) -> None:
     invalid.write_bytes(b"trace")
 
     with pytest.raises(ToolError, match="perfetto-trace"):
-        create_tool(tmp_path).execute({"trace_file": str(invalid)})
+        create_tool(tmp_path).execute(arguments(invalid))
+
+
+def test_perfetto_reports_target_startup_not_found(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    trace = create_trace(tmp_path)
+    output = CSV_HEADER + (
+        '"trace_meta","com.example.app",,0,"[NULL]","[NULL]",2\n'
+    )
+    mock_processor(monkeypatch, output)
+
+    result = create_tool(tmp_path).execute(arguments(trace))
+
+    assert result["error_type"] == "TARGET_STARTUP_NOT_FOUND"
+    assert result["package_name"] == "com.example.app"
+
+
+def test_perfetto_rejects_multiple_target_startups(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    trace = create_trace(tmp_path)
+    output = CSV_HEADER + """\
+"trace_meta","com.example.app",,2,"[NULL]","[NULL]",2
+"""
+    mock_processor(monkeypatch, output)
+
+    result = create_tool(tmp_path).execute(arguments(trace))
+
+    assert result["error_type"] == "MULTIPLE_TARGET_STARTUPS"
+
+
+def test_perfetto_validates_package_name(tmp_path: Path) -> None:
+    trace = create_trace(tmp_path)
+
+    with pytest.raises(ToolError, match="package_name"):
+        create_tool(tmp_path).execute(arguments(trace, "not a package"))

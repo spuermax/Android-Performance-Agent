@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import io
 import os
+import re
 import shutil
 import subprocess
 import time
@@ -27,6 +28,9 @@ class AnalyzePerfettoTraceTool(BaseTool):
     MAX_DETAIL_SLICES = 10
     MAX_BOTTLENECKS = 8
     TRACE_SUFFIXES = {".perfetto-trace", ".pftrace"}
+    PACKAGE_PATTERN = re.compile(
+        r"[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*)+"
+    )
 
     @property
     def parameters_schema(self) -> dict[str, Any]:
@@ -39,16 +43,29 @@ class AnalyzePerfettoTraceTool(BaseTool):
                         "run_macrobenchmark 或 run_standalone_macrobenchmark "
                         "返回的单个 .perfetto-trace 文件绝对路径。"
                     ),
-                }
+                },
+                "package_name": {
+                    "type": "string",
+                    "description": (
+                        "Macrobenchmark Tool 返回的目标 package/applicationId。"
+                        "Trace Processor SQL 必须只分析该 package 的 Startup。"
+                    ),
+                },
             },
-            "required": ["trace_file"],
+            "required": ["trace_file", "package_name"],
             "additionalProperties": False,
         }
 
     def execute(self, arguments: dict[str, Any]) -> dict[str, Any]:
         raw_trace_file = arguments.get("trace_file")
+        package_name = arguments.get("package_name")
         if not isinstance(raw_trace_file, str) or not raw_trace_file.strip():
             raise ToolError("trace_file 必须是非空字符串")
+        if not isinstance(package_name, str) or not self.PACKAGE_PATTERN.fullmatch(
+            package_name.strip()
+        ):
+            raise ToolError("package_name 格式不合法")
+        package_name = package_name.strip()
 
         trace_file = Path(raw_trace_file).expanduser().resolve()
         self._validate_trace_path(trace_file)
@@ -57,12 +74,14 @@ class AnalyzePerfettoTraceTool(BaseTool):
         if not trace_file.exists():
             return self._empty_result(
                 trace_file=trace_file,
+                package_name=package_name,
                 error_type="TRACE_FILE_NOT_FOUND",
                 summary="指定的 Perfetto Trace 文件不存在。",
             )
         if not trace_file.is_file():
             return self._empty_result(
                 trace_file=trace_file,
+                package_name=package_name,
                 error_type="TRACE_FILE_NOT_FOUND",
                 summary="指定的 Perfetto Trace 路径不是普通文件。",
             )
@@ -71,6 +90,7 @@ class AnalyzePerfettoTraceTool(BaseTool):
         if trace_processor is None:
             return self._empty_result(
                 trace_file=trace_file,
+                package_name=package_name,
                 error_type="TRACE_PROCESSOR_NOT_FOUND",
                 summary=(
                     "未找到官方 trace_processor_shell/trace_processor；"
@@ -80,11 +100,16 @@ class AnalyzePerfettoTraceTool(BaseTool):
             )
 
         started = time.monotonic()
-        query = self._run_query(trace_processor, trace_file, self._analysis_sql())
+        query = self._run_query(
+            trace_processor,
+            trace_file,
+            self._analysis_sql(package_name),
+        )
         duration_ms = int((time.monotonic() - started) * 1000)
         if query["exception"] == "TimeoutExpired":
             return self._empty_result(
                 trace_file=trace_file,
+                package_name=package_name,
                 trace_processor_path=trace_processor,
                 duration_ms=duration_ms,
                 error_type="TRACE_PROCESSOR_TIMEOUT",
@@ -97,6 +122,7 @@ class AnalyzePerfettoTraceTool(BaseTool):
         if query["exception"] is not None or query["returncode"] != 0:
             return self._empty_result(
                 trace_file=trace_file,
+                package_name=package_name,
                 trace_processor_path=trace_processor,
                 duration_ms=duration_ms,
                 error_type="TRACE_PROCESSOR_SQL_FAILED",
@@ -109,6 +135,7 @@ class AnalyzePerfettoTraceTool(BaseTool):
         except (csv.Error, ValueError) as exc:
             return self._empty_result(
                 trace_file=trace_file,
+                package_name=package_name,
                 trace_processor_path=trace_processor,
                 duration_ms=duration_ms,
                 error_type="TRACE_PROCESSOR_OUTPUT_INVALID",
@@ -116,19 +143,55 @@ class AnalyzePerfettoTraceTool(BaseTool):
                 important_logs=self._important_logs(query["stderr"]),
             )
 
+        metadata_rows = self._rows(rows, "trace_meta")
+        total_startups = (
+            self._int(metadata_rows[0].get("rank")) or 0
+            if metadata_rows
+            else 0
+        )
+        target_startups = (
+            self._int(metadata_rows[0].get("event_count")) or 0
+            if metadata_rows
+            else 0
+        )
         startup_rows = self._rows(rows, "startup")
-        if not startup_rows:
+        if target_startups > 1:
             return self._empty_result(
                 trace_file=trace_file,
+                package_name=package_name,
                 trace_processor_path=trace_processor,
                 duration_ms=duration_ms,
-                error_type="ANDROID_STARTUP_NOT_FOUND",
-                summary="Trace 中没有检测到 Android App Startup 区间。",
+                error_type="MULTIPLE_TARGET_STARTUPS",
+                summary=(
+                    f"Trace 中检测到 {target_startups} 个目标 package "
+                    f"{package_name} 的 Startup，Tool 不会自动选择。"
+                ),
+                important_logs=self._important_logs(query["stderr"]),
+            )
+        if not startup_rows:
+            error_type = (
+                "ANDROID_STARTUP_NOT_FOUND"
+                if total_startups == 0
+                else "TARGET_STARTUP_NOT_FOUND"
+            )
+            summary = (
+                "Trace 中没有检测到 Android App Startup 区间。"
+                if total_startups == 0
+                else f"Trace 中没有检测到目标 package {package_name} 的 Startup。"
+            )
+            return self._empty_result(
+                trace_file=trace_file,
+                package_name=package_name,
+                trace_processor_path=trace_processor,
+                duration_ms=duration_ms,
+                error_type=error_type,
+                summary=summary,
                 important_logs=self._important_logs(query["stderr"]),
             )
 
         return self._structured_result(
             trace_file=trace_file,
+            requested_package=package_name,
             trace_processor_path=trace_processor,
             duration_ms=duration_ms,
             rows=rows,
@@ -201,18 +264,27 @@ class AnalyzePerfettoTraceTool(BaseTool):
             }
 
     @classmethod
-    def _analysis_sql(cls) -> str:
+    def _analysis_sql(cls, package_name: str) -> str:
         threshold_ns = int(cls.LONG_MAIN_THREAD_SLICE_MS * 1_000_000)
+        package_literal = cls._sql_string_literal(package_name)
         return f"""
 INCLUDE PERFETTO MODULE android.startup.startups;
 INCLUDE PERFETTO MODULE android.startup.startup_breakdowns;
 INCLUDE PERFETTO MODULE android.garbage_collection;
 
 WITH
+startup_counts AS (
+  SELECT COUNT(*) AS total_count,
+         SUM(CASE WHEN package = {package_literal} THEN 1 ELSE 0 END)
+           AS target_count
+  FROM android_startups
+),
 selected_startup AS (
   SELECT startup_id, ts, dur, package, startup_type
   FROM android_startups
-  ORDER BY dur DESC, startup_id
+  WHERE package = {package_literal}
+    AND (SELECT target_count FROM startup_counts) = 1
+  ORDER BY ts, startup_id
   LIMIT 1
 ),
 main_thread AS (
@@ -269,6 +341,7 @@ initialization_slices AS (
   )
 ),
 gc_events AS (
+  -- gc_dur is GC wall duration. This computes interval overlap, not STW pause.
   SELECT g.gc_type AS name,
          (MIN(g.gc_ts + g.gc_dur, s.ts + s.dur) - MAX(g.gc_ts, s.ts)) / 1e6
            AS duration_ms,
@@ -290,8 +363,13 @@ process_cpu AS (
   WHERE sc.ts < s.ts + s.dur AND sc.ts + sc.dur > s.ts
 )
 SELECT * FROM (
+  SELECT 'trace_meta' AS section, {package_literal} AS name,
+         NULL AS duration_ms, c.target_count AS event_count,
+         NULL AS tid, NULL AS value, c.total_count AS rank
+  FROM startup_counts c
+  UNION ALL
   SELECT 'startup' AS section, s.package AS name, s.dur / 1e6 AS duration_ms,
-         (SELECT COUNT(*) FROM android_startups) AS event_count,
+         (SELECT target_count FROM startup_counts) AS event_count,
          NULL AS tid, s.startup_type AS value, s.startup_id AS rank
   FROM selected_startup s
   UNION ALL
@@ -355,6 +433,7 @@ ORDER BY section, rank;
         cls,
         *,
         trace_file: Path,
+        requested_package: str,
         trace_processor_path: Path,
         duration_ms: int,
         rows: list[dict[str, str | None]],
@@ -362,7 +441,9 @@ ORDER BY section, rank;
     ) -> dict[str, Any]:
         startup = cls._rows(rows, "startup")[0]
         startup_duration_ms = cls._float(startup.get("duration_ms")) or 0.0
-        startup_count = cls._int(startup.get("event_count")) or 1
+        metadata = cls._rows(rows, "trace_meta")[0]
+        startup_count = cls._int(metadata.get("rank")) or 0
+        target_startup_count = cls._int(metadata.get("event_count")) or 0
         main_rows = cls._rows(rows, "main_thread")
         main = main_rows[0] if main_rows else {}
         breakdown_rows = cls._rows(rows, "breakdown")
@@ -376,7 +457,7 @@ ORDER BY section, rank;
 
         long_slices = cls._slice_rows(cls._rows(rows, "long_main_slice"))
         binder_slices = cls._slice_rows(cls._rows(rows, "binder_slice"))
-        gc_events = cls._slice_rows(cls._rows(rows, "gc_event"))
+        gc_events = cls._gc_rows(cls._rows(rows, "gc_event"))
         app_init = cls._slice_rows(cls._rows(rows, "application"))
         provider_init = cls._slice_rows(cls._rows(rows, "content_provider"))
         process_cpu_rows = cls._rows(rows, "process_cpu")
@@ -390,26 +471,21 @@ ORDER BY section, rank;
         runnable_ms = cls._breakdown_total(breakdown, "R", "R+")
         io_ms = cls._breakdown_total(breakdown, "io")
         binder_ms = cls._breakdown_total(breakdown, "binder")
-        gc_total_ms = sum(event["duration_ms"] for event in gc_events)
+        gc_total_ms = sum(event["wall_overlap_ms"] for event in gc_events)
         startup_stages = cls._startup_stages(breakdown)
         top_bottlenecks = cls._top_bottlenecks(
             breakdown_rows,
             startup_duration_ms,
         )
-        warnings: list[str] = []
-        if startup_count > 1:
-            warnings.append(
-                "Trace 中存在多个 Android Startup；当前分析持续时间最长的一个。"
-            )
-
         return {
             "success": True,
             "trace_file": str(trace_file),
             "trace_processor_path": str(trace_processor_path),
-            "package_name": startup.get("name"),
+            "package_name": requested_package,
             "startup_type": startup.get("value"),
             "startup_duration_ms": startup_duration_ms,
             "startup_count_in_trace": startup_count,
+            "target_startup_count": target_startup_count,
             "main_thread": {
                 "name": main.get("name"),
                 "tid": cls._int(main.get("tid")),
@@ -431,7 +507,7 @@ ORDER BY section, rank;
                 "event_count": cls._breakdown_count(breakdown, "io"),
             },
             "gc": {
-                "total_pause_overlap_ms": round(gc_total_ms, 6),
+                "total_wall_overlap_ms": round(gc_total_ms, 6),
                 "event_count": len(gc_events),
                 "events": gc_events,
             },
@@ -453,11 +529,11 @@ ORDER BY section, rank;
                 "slices": provider_init,
             },
             "top_bottlenecks": top_bottlenecks,
-            "warnings": warnings,
+            "warnings": [],
             "analysis_duration_ms": duration_ms,
             "error_type": None,
             "summary": (
-                f"已从 Perfetto Trace 提取 {startup.get('name')} 的 "
+                f"已从 Perfetto Trace 提取 {requested_package} 的 "
                 f"{startup.get('value')} 启动事实，启动区间 "
                 f"{startup_duration_ms:.3f} ms。"
             ),
@@ -483,6 +559,28 @@ ORDER BY section, rank;
                 }
             )
         return result
+
+    @staticmethod
+    def _gc_rows(
+        rows: list[dict[str, str | None]],
+    ) -> list[dict[str, Any]]:
+        return [
+            {
+                "gc_type": row.get("name"),
+                "wall_overlap_ms": round(
+                    AnalyzePerfettoTraceTool._float(row.get("duration_ms"))
+                    or 0.0,
+                    6,
+                ),
+                "tid": AnalyzePerfettoTraceTool._int(row.get("tid")),
+                "process_name": row.get("value"),
+            }
+            for row in rows
+        ]
+
+    @staticmethod
+    def _sql_string_literal(value: str) -> str:
+        return "'" + value.replace("'", "''") + "'"
 
     @classmethod
     def _top_bottlenecks(
@@ -620,6 +718,7 @@ ORDER BY section, rank;
     def _empty_result(
         *,
         trace_file: Path,
+        package_name: str,
         error_type: str,
         summary: str,
         trace_processor_path: Path | None = None,
@@ -632,10 +731,11 @@ ORDER BY section, rank;
             "trace_processor_path": (
                 str(trace_processor_path) if trace_processor_path else None
             ),
-            "package_name": None,
+            "package_name": package_name,
             "startup_type": None,
             "startup_duration_ms": None,
             "startup_count_in_trace": 0,
+            "target_startup_count": 0,
             "main_thread": None,
             "long_main_thread_slices": [],
             "binder": None,
