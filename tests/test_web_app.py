@@ -14,11 +14,15 @@ def reset_web_state() -> None:
         web_app.state.update(
             {
                 "running": False,
+                "status": "idle",
+                "stop_requested": False,
                 "pid": None,
                 "returncode": None,
                 "project_path": "",
                 "task": "",
+                "current_tool": None,
                 "logs": [],
+                "dashboard": web_app.empty_dashboard(),
             }
         )
         web_app.process = None
@@ -239,3 +243,27 @@ def test_run_agent_terminates_process_group_when_log_reading_fails(
     assert web_app.process is None
     assert web_app.state["running"] is False
     assert web_app.state["returncode"] == -1
+
+
+def test_run_agent_reports_requested_stop_as_stopped(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeProcess:
+        pid = 1234
+        stdout: list[str] = []
+
+        def poll(self) -> int:
+            return -15
+
+        def wait(self) -> int:
+            return -15
+
+    monkeypatch.setattr(web_app.subprocess, "Popen", lambda *_args, **_kwargs: FakeProcess())
+    with web_app.lock:
+        web_app.state["running"] = True
+        web_app.state["stop_requested"] = True
+
+    web_app.run_agent("/project", "task", 15)
+
+    assert web_app.state["status"] == "stopped"
+    assert web_app.state["returncode"] == -15

@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
+from typing import Any
 
 from dotenv import load_dotenv
 
@@ -21,6 +23,8 @@ from tools.search_tool import SearchProjectTextTool
 from tools.startup_source_locator_tool import LocateStartupBottleneckSourceTool
 from tools.startup_optimization_tool import GenerateStartupOptimizationPlanTool
 from tools.standalone_macrobenchmark_tool import RunStandaloneMacrobenchmarkTool
+
+EVENT_PREFIX = "__APA_EVENT__ "
 
 
 def parse_args() -> argparse.Namespace:
@@ -44,7 +48,19 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Hide intermediate tool execution logs.",
     )
+    parser.add_argument(
+        "--event-stream",
+        action="store_true",
+        help="Emit machine-readable Agent events for local UI clients.",
+    )
     return parser.parse_args()
+
+
+def _event_stdout_sink(event: dict[str, Any]) -> None:
+    print(
+        EVENT_PREFIX + json.dumps(event, ensure_ascii=False, separators=(",", ":")),
+        flush=True,
+    )
 
 
 def main() -> int:
@@ -86,6 +102,7 @@ def main() -> int:
         project_path=project_path,
         max_steps=args.max_steps,
         verbose=not args.quiet,
+        event_sink=_event_stdout_sink if args.event_stream else None,
     )
 
     try:

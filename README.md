@@ -121,7 +121,7 @@ cp .env.example .env
 
 浏览器默认打开 `http://127.0.0.1:8765`。Web UI 仍通过 `run.sh` 使用同一套
 Agent Loop 与 Tool Registry，不会改成固定 Workflow。详细说明见
-[`README_WEB_UI.md`](README_WEB_UI.md)。
+[`README_WEB_UI_V0.2.md`](README_WEB_UI_V0.2.md)。
 
 执行全部单元测试：
 

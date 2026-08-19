@@ -13,7 +13,6 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Mapping
 
-
 ROOT = Path(__file__).resolve().parent
 WEB_ROOT = ROOT / "web"
 RUN_SH = ROOT / "run.sh"
@@ -26,16 +25,78 @@ STOP_GRACE_SECONDS = 3.0
 FORCE_STOP_SIGNAL = getattr(signal, "SIGKILL", signal.SIGTERM)
 CSRF_TOKEN_PLACEHOLDER = "__ANDROID_PERF_CSRF_TOKEN__"
 CSRF_TOKEN = secrets.token_urlsafe(32)
+EVENT_PREFIX = "__APA_EVENT__ "
 
 lock = threading.Lock()
 shutdown_event = threading.Event()
+
+
+def empty_dashboard(project_path: str = "") -> dict[str, Any]:
+    return {
+        "project": {
+            "status": "pending",
+            "path": project_path,
+            "module": None,
+            "application_id": None,
+            "launcher_activity": None,
+            "launcher_component": None,
+            "summary": None,
+        },
+        "device": {
+            "status": "pending",
+            "serial": None,
+            "manufacturer": None,
+            "model": None,
+            "android_version": None,
+            "sdk": None,
+            "abi": None,
+            "summary": None,
+        },
+        "measure": {
+            "status": "pending",
+            "ttid_ms": None,
+            "ttfd_available": False,
+            "ttfd_ms": None,
+            "run_count": None,
+            "trace_files": [],
+            "summary": None,
+        },
+        "analyze": {
+            "status": "pending",
+            "startup_duration_ms": None,
+            "startup_type": None,
+            "trace_health": None,
+            "trace_health_issues": [],
+            "top_bottlenecks": [],
+            "summary": None,
+        },
+        "plan": {
+            "status": "pending",
+            "recommendations": [],
+            "priority_order": [],
+            "summary": None,
+        },
+        "locate": {
+            "status": "pending",
+            "matches": [],
+            "unresolved": [],
+            "summary": None,
+        },
+        "final_text": None,
+    }
+
+
 state: dict[str, Any] = {
     "running": False,
+    "status": "idle",
+    "stop_requested": False,
     "pid": None,
     "returncode": None,
     "project_path": "",
     "task": "",
+    "current_tool": None,
     "logs": [],
+    "dashboard": empty_dashboard(),
 }
 process: subprocess.Popen[str] | None = None
 agent_thread: threading.Thread | None = None
@@ -54,18 +115,21 @@ def add_log(line: str) -> None:
 
 
 def reserve_agent_run(project_path: str, task: str) -> bool:
-    """Atomically reserve the single Agent slot before starting its thread."""
     with lock:
         if state["running"]:
             return False
         state.update(
             {
                 "running": True,
+                "status": "running",
+                "stop_requested": False,
                 "pid": None,
                 "returncode": None,
                 "project_path": project_path,
                 "task": task,
+                "current_tool": None,
                 "logs": [],
+                "dashboard": empty_dashboard(project_path),
             }
         )
         return True
@@ -76,6 +140,7 @@ def reset_reserved_run(returncode: int = -1) -> None:
     with lock:
         agent_thread = None
         state["running"] = False
+        state["status"] = "failed"
         state["pid"] = None
         state["returncode"] = returncode
 
@@ -180,16 +245,197 @@ def request_agent_stop() -> tuple[bool, str]:
         return False, "当前没有运行中的 Agent"
     if not signal_process_group(child, signal.SIGTERM):
         return False, "Agent 已结束"
+    with lock:
+        state["stop_requested"] = True
+        state["status"] = "stopping"
     add_log("[Web UI] 已请求停止 Agent。")
     threading.Thread(target=escalate_stop, args=(child,), daemon=True).start()
     return True, ""
+
+
+def _section_status(result: dict[str, Any]) -> str:
+    return "success" if result.get("success") is True else "failed"
+
+
+def _first_ready_device(result: dict[str, Any]) -> dict[str, Any] | None:
+    devices = result.get("devices")
+    if not isinstance(devices, list):
+        return None
+    for device in devices:
+        if isinstance(device, dict) and device.get("state") == "device":
+            return device
+    return None
+
+
+def _apply_tool_result(name: str, result: dict[str, Any]) -> None:
+    with lock:
+        dashboard = state["dashboard"]
+
+        if name == "inspect_project":
+            dashboard["project"]["status"] = _section_status(result)
+            dashboard["project"]["summary"] = result.get("summary")
+            return
+
+        if name == "inspect_app_target":
+            dashboard["project"].update(
+                {
+                    "status": _section_status(result),
+                    "module": result.get("module"),
+                    "application_id": result.get("application_id"),
+                    "launcher_activity": result.get("launcher_activity"),
+                    "launcher_component": result.get("launcher_component"),
+                    "summary": result.get("summary"),
+                }
+            )
+            return
+
+        if name == "adb_devices":
+            section = dashboard["device"]
+            ready = _first_ready_device(result)
+            section["status"] = _section_status(result)
+            section["summary"] = result.get("summary")
+            if ready is not None:
+                for key in (
+                    "serial",
+                    "manufacturer",
+                    "model",
+                    "android_version",
+                    "sdk",
+                    "abi",
+                ):
+                    section[key] = ready.get(key)
+            return
+
+        if name in {"run_macrobenchmark", "run_standalone_macrobenchmark"}:
+            section = dashboard["measure"]
+            section.update(
+                {
+                    "status": _section_status(result),
+                    "ttid_ms": result.get("ttid_ms"),
+                    "ttfd_available": bool(result.get("ttfd_available")),
+                    "ttfd_ms": result.get("ttfd_ms"),
+                    "run_count": result.get("run_count"),
+                    "trace_files": result.get("trace_files") or [],
+                    "summary": result.get("summary"),
+                }
+            )
+            device = dashboard["device"]
+            if result.get("serial") is not None:
+                device["serial"] = result.get("serial")
+            device_context = result.get("device_context")
+            if isinstance(device_context, dict):
+                manufacturer = (
+                    device_context.get("manufacturer") or device_context.get("brand")
+                )
+                if manufacturer is not None:
+                    device["manufacturer"] = manufacturer
+                for key in ("model", "sdk"):
+                    if device_context.get(key) is not None:
+                        device[key] = device_context.get(key)
+            return
+
+        if name == "analyze_perfetto_trace":
+            dashboard["analyze"].update(
+                {
+                    "status": _section_status(result),
+                    "startup_duration_ms": result.get("startup_duration_ms"),
+                    "startup_type": result.get("startup_type"),
+                    "trace_health": result.get("trace_health"),
+                    "trace_health_issues": result.get("trace_health_issues") or [],
+                    "top_bottlenecks": result.get("top_bottlenecks") or [],
+                    "summary": result.get("summary"),
+                }
+            )
+            return
+
+        if name == "generate_startup_optimization_plan":
+            dashboard["plan"].update(
+                {
+                    "status": _section_status(result),
+                    "recommendations": result.get("recommendations") or [],
+                    "priority_order": result.get("priority_order") or [],
+                    "summary": result.get("summary"),
+                }
+            )
+            return
+
+        if name == "locate_startup_bottleneck_source":
+            dashboard["locate"].update(
+                {
+                    "status": _section_status(result),
+                    "matches": result.get("matches") or [],
+                    "unresolved": result.get("unresolved") or [],
+                    "summary": result.get("summary"),
+                }
+            )
+
+
+def apply_agent_event(event: dict[str, Any]) -> None:
+    event_type = event.get("type")
+    if event_type == "tool_started":
+        name = event.get("name")
+        with lock:
+            state["current_tool"] = name
+            if isinstance(name, str):
+                stage = {
+                    "inspect_project": "project",
+                    "inspect_app_target": "project",
+                    "adb_devices": "device",
+                    "run_macrobenchmark": "measure",
+                    "run_standalone_macrobenchmark": "measure",
+                    "analyze_perfetto_trace": "analyze",
+                    "generate_startup_optimization_plan": "plan",
+                    "locate_startup_bottleneck_source": "locate",
+                }.get(name)
+                if stage is not None:
+                    state["dashboard"][stage]["status"] = "running"
+        return
+
+    if event_type == "tool_result":
+        name = event.get("name")
+        result = event.get("result")
+        if isinstance(name, str) and isinstance(result, dict):
+            _apply_tool_result(name, result)
+        return
+
+    if event_type == "final":
+        with lock:
+            state["dashboard"]["final_text"] = event.get("text")
+        return
+
+    if event_type == "run_failed":
+        with lock:
+            state["status"] = "failed"
+
+
+def handle_process_line(line: str) -> None:
+    stripped = line.rstrip("\n")
+    if stripped.startswith(EVENT_PREFIX):
+        payload = stripped[len(EVENT_PREFIX) :]
+        try:
+            event = json.loads(payload)
+        except json.JSONDecodeError:
+            add_log("[Web UI] 无法解析 Agent event：" + payload)
+            return
+        if isinstance(event, dict):
+            apply_agent_event(event)
+        return
+    add_log(stripped)
 
 
 def run_agent(project_path: str, task: str, max_steps: int) -> None:
     global agent_thread, process
     child: subprocess.Popen[str] | None = None
     code = -1
-    cmd = [str(RUN_SH), project_path, "--task", task, "--max-steps", str(max_steps)]
+    cmd = [
+        str(RUN_SH),
+        project_path,
+        "--task",
+        task,
+        "--max-steps",
+        str(max_steps),
+        "--event-stream",
+    ]
     add_log("$ " + " ".join(repr(value) for value in cmd))
     try:
         if shutdown_event.is_set():
@@ -212,7 +458,7 @@ def run_agent(project_path: str, task: str, max_steps: int) -> None:
             signal_process_group(child, signal.SIGTERM)
         if child.stdout is not None:
             for line in child.stdout:
-                add_log(line)
+                handle_process_line(line)
         code = child.wait()
         add_log(f"[Web UI] Agent 进程结束，returncode={code}")
     except Exception as exc:
@@ -222,6 +468,7 @@ def run_agent(project_path: str, task: str, max_steps: int) -> None:
             escalate_stop(child)
     finally:
         with lock:
+            stopped = bool(state["stop_requested"])
             if process is child:
                 process = None
             if agent_thread is threading.current_thread():
@@ -229,6 +476,13 @@ def run_agent(project_path: str, task: str, max_steps: int) -> None:
             state["running"] = False
             state["returncode"] = code
             state["pid"] = None
+            state["current_tool"] = None
+            if stopped:
+                state["status"] = "stopped"
+            elif code == 0:
+                state["status"] = "completed"
+            else:
+                state["status"] = "failed"
 
 
 def shutdown_agent() -> None:
@@ -332,6 +586,9 @@ class Handler(BaseHTTPRequestHandler):
             with lock:
                 data = dict(state)
                 data["logs"] = list(state["logs"])
+                data["dashboard"] = json.loads(
+                    json.dumps(state["dashboard"], ensure_ascii=False)
+                )
             send_json(self, data)
             return
         self.send_error(404)
