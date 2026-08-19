@@ -1,6 +1,6 @@
 # Android Performance Agent
 
-> V0.5 开发中
+> V0.5.1 开发中
 
 使用 Python 3.12 + DeepSeek 的 Android 性能分析 Agent，通过 LLM Tool Calling 自主选择并调用工具。
 
@@ -77,6 +77,14 @@ Baseline/Startup Profile，也不执行重新测量。
 不会因为项目中存在 `Application.onCreate` 或常见 API 就断言它是瓶颈。
 Tool 复用受项目路径约束的文本搜索与文件读取能力，只读且不访问项目目录外文件。
 
+V0.5.1 收紧了 Perfetto evidence 语义：瓶颈排名以
+`android_startup_opinionated_breakdown` 的 exclusive 启动归因为准。
+`android_thread_slices_for_all_startups` 提取的 raw Slice 可能互相嵌套或重叠，
+仅作为源码定位线索，禁止累加，也不进入独立瓶颈排名。`bindApplication` raw
+父 Slice 不等于业务 `Application.onCreate` 耗时；没有类级 Trace 证据时，
+只能定位为 App binding/Application 启动路径候选。源码候选按
+`category + file_path + symbol` 聚合，并保留 `matched_lines`。
+
 ## 最简单的使用流程
 
 需要预先安装 Python 3.12。
@@ -119,7 +127,8 @@ cp .env.example .env
 
 所有项目读取和构建工具都绑定最初指定的 Android 项目目录，不能越界访问其他路径。Gradle 输出会在 Tool Layer 中清洗和分类，再交给 LLM 判断，以减少噪音和上下文开销。
 
-V0.5 在 Perfetto Startup 事实和结构化优化候选之上增加源码位置候选。
+V0.5.1 在 Perfetto Startup 事实和结构化优化候选之上增加源码位置候选，
+并明确区分 exclusive 排名数据与 raw 定位数据。
 Tool 负责事实提取、证据映射和只读源码定位，最终解释与方案取舍仍由 LLM 决定；
 本版本不会自动修改或提交业务代码，也不执行 Before/After。
 项目不使用 RAG、LangChain 或 LangGraph。

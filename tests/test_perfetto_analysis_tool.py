@@ -48,11 +48,14 @@ def normal_csv() -> str:
 "startup","com.example.app",308.5,1,"[NULL]","cold",51
 "main_thread","com.example.app",,"1234",1234,"735",0
 "breakdown","choreographer_do_frame",90.0,10,"[NULL]","[NULL]",1
+"breakdown","bind_application",19.0,3,"[NULL]","[NULL]",2
 "breakdown","binder",40.0,8,"[NULL]","[NULL]",2
 "breakdown","io",30.0,6,"[NULL]","[NULL]",3
 "breakdown","Running",50.0,12,"[NULL]","[NULL]",4
 "breakdown","R",5.0,2,"[NULL]","[NULL]",5
 "long_main_slice","bindApplication",35.0,1,1234,"com.example.app",1
+"long_main_slice","Choreographer#doFrame",105.0,1,1234,"com.example.app",2
+"long_main_slice","traversal",104.0,1,1234,"com.example.app",3
 "binder_slice","binder transaction",8.0,1,1234,"com.example.app",1
 "gc_event","young concurrent copying",4.0,1,1250,"com.example.app",1
 "process_cpu","app_process_running",180.0,40,"[NULL]","[NULL]",0
@@ -149,8 +152,21 @@ def test_perfetto_parses_startup_and_structured_bottlenecks(
     assert result["gc"]["events"][0]["wall_overlap_ms"] == 4.0
     assert result["cpu"]["app_process_running_ms"] == 180.0
     assert result["application_initialization"]["detected"] is True
+    assert result["application_initialization"]["exclusive_bind_application_ms"] == 19.0
+    assert result["application_initialization"]["class_level_on_create_detected"] is False
+    assert "不等于业务 Application.onCreate" in (
+        result["application_initialization"]["attribution"]
+    )
     assert result["content_provider_initialization"]["detected"] is True
     assert result["top_bottlenecks"][0]["reason"] == "choreographer_do_frame"
+    assert result["top_bottlenecks"][0]["duration_kind"] == (
+        "exclusive_startup_attribution"
+    )
+    assert result["top_bottlenecks_semantics"]["mutually_exclusive"] is True
+    assert result["long_main_thread_slices_semantics"]["additive"] is False
+    assert result["long_main_thread_slices_semantics"]["usage"] == (
+        "source_localization_only"
+    )
     assert calls[0][0][0] == str(PROCESSOR)
     assert calls[0][0][1] == "query"
     assert "android.startup.startups" in calls[0][0][3]

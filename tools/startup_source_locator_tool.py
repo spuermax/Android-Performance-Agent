@@ -185,7 +185,7 @@ class LocateStartupBottleneckSourceTool(BaseTool):
 
         matches = self._deduplicate_and_sort(matches)[: self.MAX_MATCHES]
         summary = (
-            f"已基于 V0.4 真实 evidence 在 {module_name} 中定位 "
+            f"已基于结构化优化计划的真实 evidence 在 {module_name} 中定位 "
             f"{len(matches)} 个候选源码位置；{len(unresolved)} 类仍无法可靠定位。"
         )
         return {
@@ -207,7 +207,7 @@ class LocateStartupBottleneckSourceTool(BaseTool):
         if plan.get("success") is not True:
             return (
                 "INVALID_OPTIMIZATION_PLAN",
-                "optimization_plan 不是成功的 V0.4 优化计划。",
+                "optimization_plan 不是成功的结构化启动优化计划。",
             )
         plan_package = plan.get("package_name")
         if not isinstance(plan_package, str) or not plan_package.strip():
@@ -230,20 +230,24 @@ class LocateStartupBottleneckSourceTool(BaseTool):
     @staticmethod
     def _recommendations(plan: dict[str, Any]) -> list[dict[str, str]]:
         recommendations: list[dict[str, str]] = []
-        for value in plan["recommendations"]:
-            if not isinstance(value, dict):
+        sources = (plan["recommendations"], plan.get("source_localization_hints", []))
+        for source in sources:
+            if not isinstance(source, list):
                 continue
-            category = value.get("category")
-            evidence = value.get("evidence")
-            if (
-                isinstance(category, str)
-                and category.strip()
-                and isinstance(evidence, str)
-                and evidence.strip()
-            ):
-                recommendations.append(
-                    {"category": category.strip(), "evidence": evidence.strip()}
-                )
+            for value in source:
+                if not isinstance(value, dict):
+                    continue
+                category = value.get("category")
+                evidence = value.get("evidence")
+                if (
+                    isinstance(category, str)
+                    and category.strip()
+                    and isinstance(evidence, str)
+                    and evidence.strip()
+                ):
+                    recommendations.append(
+                        {"category": category.strip(), "evidence": evidence.strip()}
+                    )
         return recommendations
 
     @staticmethod
@@ -377,6 +381,16 @@ class LocateStartupBottleneckSourceTool(BaseTool):
                 symbol = name_match.group(1) if name_match else f"<{tag}>"
                 evidence_terms = cls._evidence_terms(evidence)
                 exact = any(term in block for term in evidence_terms)
+                if exact:
+                    confidence = "HIGH"
+                elif category == "APPLICATION_INITIALIZATION":
+                    confidence = (
+                        "MEDIUM"
+                        if cls._has_explicit_application_lifecycle_evidence(evidence)
+                        else "LOW"
+                    )
+                else:
+                    confidence = "MEDIUM"
                 matches.append(
                     {
                         "category": category,
@@ -384,13 +398,14 @@ class LocateStartupBottleneckSourceTool(BaseTool):
                         "file_path": relative_path,
                         "line": index + 1,
                         "symbol": symbol,
-                        "confidence": "HIGH" if exact else "MEDIUM",
+                        "confidence": confidence,
                         "reason": (
                             f"Manifest {tag} 声明与 evidence 中的类名一致。"
                             if exact
                             else (
                                 f"Manifest 注册了相关 {tag}，它是基于当前瓶颈类型的"
-                                "候选配置位置，但尚无类名级 Trace 证据。"
+                                f"{confidence} 置信度候选配置位置；"
+                                "注册关系只证明它参与启动，不证明耗时归因。"
                             )
                         ),
                     }
@@ -414,6 +429,10 @@ class LocateStartupBottleneckSourceTool(BaseTool):
             "Android",
             "Perfetto",
             "Trace",
+            "Raw",
+            "Framework",
+            "App",
+            "Choreographer",
         }
         terms: list[str] = []
         patterns = (
@@ -512,14 +531,20 @@ class LocateStartupBottleneckSourceTool(BaseTool):
         cls,
         matches: list[dict[str, Any]],
     ) -> list[dict[str, Any]]:
-        unique: dict[tuple[str, str, int], dict[str, Any]] = {}
+        unique: dict[tuple[str, str, str], dict[str, Any]] = {}
         for match in matches:
-            key = (match["category"], match["file_path"], match["line"])
+            key = (match["category"], match["file_path"], match["symbol"])
             previous = unique.get(key)
-            if previous is None or cls.CONFIDENCE_ORDER[match["confidence"]] > (
-                cls.CONFIDENCE_ORDER[previous["confidence"]]
-            ):
-                unique[key] = match
+            lines = {match["line"]}
+            if previous is not None:
+                lines.update(previous.get("matched_lines", [previous["line"]]))
+            candidate = dict(match)
+            if previous is not None and cls.CONFIDENCE_ORDER[
+                previous["confidence"]
+            ] >= cls.CONFIDENCE_ORDER[match["confidence"]]:
+                candidate = dict(previous)
+            candidate["matched_lines"] = sorted(lines)
+            unique[key] = candidate
         return sorted(
             unique.values(),
             key=lambda item: (
@@ -529,6 +554,11 @@ class LocateStartupBottleneckSourceTool(BaseTool):
                 item["line"],
             ),
         )
+
+    @staticmethod
+    def _has_explicit_application_lifecycle_evidence(evidence: str) -> bool:
+        normalized = re.sub(r"[\s_.#/]+", "", evidence).lower()
+        return "applicationoncreate" in normalized
 
     @staticmethod
     def _empty_result(

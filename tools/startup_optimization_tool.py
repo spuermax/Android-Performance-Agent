@@ -59,9 +59,9 @@ class GenerateStartupOptimizationPlanTool(BaseTool):
         self._binder_candidate(candidates, analysis, startup_duration_ms)
         self._gc_candidate(candidates, analysis, startup_duration_ms)
         self._cpu_candidate(candidates, analysis, startup_duration_ms)
-        self._long_slice_candidate(candidates, analysis, startup_duration_ms)
         self._dex_class_candidate(candidates, analysis, startup_duration_ms)
         self._first_frame_candidate(candidates, analysis, startup_duration_ms)
+        source_localization_hints = self._raw_slice_localization_hints(analysis)
 
         ordered = sorted(
             candidates,
@@ -110,6 +110,7 @@ class GenerateStartupOptimizationPlanTool(BaseTool):
             "recommendations": recommendations,
             "priority_order": priority_order,
             "verification_plan": verification_plan,
+            "source_localization_hints": source_localization_hints,
             "evidence_threshold": {
                 "minimum_impact_ms": self.MIN_EVIDENCE_IMPACT_MS,
                 "minimum_startup_percentage": (
@@ -156,23 +157,57 @@ class GenerateStartupOptimizationPlanTool(BaseTool):
         if data.get("detected") is not True:
             return
         slices = cls._valid_slices(data.get("slices"))
-        impact_ms = max((item["duration_ms"] for item in slices), default=0.0)
+        class_slices = [
+            item
+            for item in slices
+            if "oncreate" in item["name"].lower()
+            and item["name"].lower() != "bindapplication"
+        ]
+        exclusive = cls._reason_metric(analysis, "bind_application")
+        if exclusive is not None:
+            impact_ms = exclusive["duration_ms"]
+            raw_bind = [
+                item for item in slices
+                if item["name"].lower() == "bindapplication"
+            ]
+            raw_detail = cls._slice_evidence("Raw bindApplication 父 Slice", raw_bind)
+            class_note = (
+                cls._slice_evidence("类级 Application.onCreate Slice", class_slices)
+                if class_slices
+                else "当前 Trace 未提供业务 Application.onCreate 类级耗时证据。"
+            )
+            evidence = (
+                f"启动 exclusive breakdown: bind_application "
+                f"{impact_ms:.3f} ms；{raw_detail} {class_note} "
+                "Raw 父 Slice 可能包含嵌套工作，不与 exclusive 时长累加。"
+            )
+        elif class_slices:
+            impact_ms = max(item["duration_ms"] for item in class_slices)
+            evidence = (
+                cls._slice_evidence("类级 Application.onCreate raw Slice", class_slices)
+                + "该 raw 时长可能包含嵌套工作，仅作定位证据。"
+            )
+        else:
+            return
         if not cls._meets_min_evidence(impact_ms, startup_ms):
             return
         severity = cls._severity(impact_ms, startup_ms, high_ms=30, medium_ms=10)
-        evidence = cls._slice_evidence("Application 初始化 Slice", slices)
         cls._append(
             output,
             category="APPLICATION_INITIALIZATION",
             severity=severity,
             impact_ms=impact_ms,
             evidence=evidence,
-            reason="Application 初始化工作位于首帧前启动关键路径。",
+            reason=(
+                "证据指向 Framework App binding/Application 启动路径；"
+                "除非 Trace 明确给出类级 Slice，否则不能把该时长归因给业务 "
+                "Application.onCreate。"
+            ),
             suggestion=(
                 "盘点 Application 中的同步任务：延迟非必要初始化、"
                 "改为按需初始化，并将不影响首帧的第三方 SDK 延后。"
             ),
-            expected_impact="减少首帧前 Application 同步关键路径。",
+            expected_impact="减少首帧前 App binding/Application 启动路径中的业务工作。",
             verification=(
                 "修改后重新执行相同 Macrobenchmark，对比 TTID 与 "
                 "bind_application/Application Slice 时长。"
@@ -350,35 +385,25 @@ class GenerateStartupOptimizationPlanTool(BaseTool):
         )
 
     @classmethod
-    def _long_slice_candidate(
+    def _raw_slice_localization_hints(
         cls,
-        output: list[dict[str, Any]],
         analysis: dict[str, Any],
-        startup_ms: float,
-    ) -> None:
+    ) -> list[dict[str, Any]]:
         slices = cls._valid_slices(analysis.get("long_main_thread_slices"))
         if not slices:
-            return
-        longest_ms = max(item["duration_ms"] for item in slices)
-        if not cls._meets_min_evidence(longest_ms, startup_ms):
-            return
-        cls._append(
-            output,
-            category="LONG_MAIN_THREAD_TASK",
-            severity=cls._severity(longest_ms, startup_ms, 50, 16),
-            impact_ms=longest_ms,
-            evidence=cls._slice_evidence("最长主线程 Slice", slices[:5]),
-            reason="长主线程 Slice 占用启动关键路径，可推迟首帧。",
-            suggestion=(
-                "按最长 Slice 顺序定位调用链，拆分或延迟不影响首帧的工作，"
-                "并避免在主线程执行大块同步计算。"
-            ),
-            expected_impact="降低单个主线程任务对首帧的支配性延迟。",
-            verification=(
-                "重新执行 Macrobenchmark，确认对应 Slice 缩短或移出启动区间，"
-                "并对比 TTID。"
-            ),
-        )
+            return []
+        return [
+            {
+                "category": "LONG_MAIN_THREAD_TASK",
+                "evidence": (
+                    cls._slice_evidence("Raw 主线程嵌套 Slice", slices[:5])
+                    + "这些 inclusive 时长可能重叠或嵌套，禁止相加，"
+                    "也不作为独立瓶颈排名；仅用于源码定位。"
+                ),
+                "duration_kind": "raw_inclusive_slice_duration",
+                "ranking_eligible": False,
+            }
+        ]
 
     @classmethod
     def _dex_class_candidate(
@@ -410,7 +435,7 @@ class GenerateStartupOptimizationPlanTool(BaseTool):
             reason="Dex/OAT 打开或 Class Verification 位于启动区间。",
             suggestion=(
                 "先减少启动阶段不必要类加载；如该证据在多次 Trace 中稳定，"
-                "后续再评估 Baseline Profile 和 Startup Profile，V0.4 不生成 Profile。"
+                "后续再评估 Baseline Profile 和 Startup Profile，当前版本不生成 Profile。"
             ),
             expected_impact="降低启动阶段 Dex/Class 加载与校验开销。",
             verification=(
@@ -432,6 +457,21 @@ class GenerateStartupOptimizationPlanTool(BaseTool):
         impact_ms = frame["duration_ms"]
         if not cls._meets_min_evidence(impact_ms, startup_ms):
             return
+        raw_frame_slices = [
+            item
+            for item in cls._valid_slices(analysis.get("long_main_thread_slices"))
+            if any(
+                token in item["name"].lower()
+                for token in ("choreographer", "doframe", "traversal")
+            )
+        ]
+        raw_note = (
+            " "
+            + cls._slice_evidence("Raw 首帧定位 Slice", raw_frame_slices)
+            + "这些 raw inclusive Slice 可能嵌套，不与 exclusive breakdown 累加。"
+            if raw_frame_slices
+            else ""
+        )
         cls._append(
             output,
             category="FIRST_FRAME_WORK",
@@ -439,7 +479,8 @@ class GenerateStartupOptimizationPlanTool(BaseTool):
             impact_ms=impact_ms,
             evidence=(
                 f"choreographer_do_frame 在启动独占分解中累计 "
-                f"{impact_ms:.3f} ms，{frame['event_count']} 个区间。"
+                f"{impact_ms:.3f} ms，{frame['event_count']} 个唯一归因区间。"
+                f"{raw_note}"
             ),
             reason="首帧布局、测量、绘制或首帧前附加工作占用明显时间。",
             suggestion=(
@@ -608,6 +649,7 @@ class GenerateStartupOptimizationPlanTool(BaseTool):
             "recommendations": [],
             "priority_order": [],
             "verification_plan": [],
+            "source_localization_hints": [],
             "evidence_threshold": {
                 "minimum_impact_ms": (
                     GenerateStartupOptimizationPlanTool.MIN_EVIDENCE_IMPACT_MS

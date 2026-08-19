@@ -477,6 +477,15 @@ ORDER BY section, rank;
             breakdown_rows,
             startup_duration_ms,
         )
+        bind_application_ms = cls._breakdown_total(
+            breakdown,
+            "bind_application",
+        )
+        class_level_on_create = any(
+            "oncreate" in str(item.get("name", "")).lower()
+            and str(item.get("name", "")).lower() != "bindapplication"
+            for item in app_init
+        )
         return {
             "success": True,
             "trace_file": str(trace_file),
@@ -497,6 +506,13 @@ ORDER BY section, rank;
                 "long_slice_count": len(long_slices),
             },
             "long_main_thread_slices": long_slices,
+            "long_main_thread_slices_semantics": {
+                "data_source": "android_thread_slices_for_all_startups",
+                "duration_kind": "raw_inclusive_slice_duration",
+                "may_overlap_or_nest": True,
+                "additive": False,
+                "usage": "source_localization_only",
+            },
             "binder": {
                 "total_blocking_ms": binder_ms,
                 "event_count": cls._breakdown_count(breakdown, "binder"),
@@ -523,13 +539,28 @@ ORDER BY section, rank;
             "application_initialization": {
                 "detected": bool(app_init),
                 "slices": app_init,
+                "exclusive_bind_application_ms": bind_application_ms,
+                "class_level_on_create_detected": class_level_on_create,
+                "attribution": (
+                    "bindApplication 是 Framework App binding 父路径；"
+                    "其 raw duration 不等于业务 Application.onCreate 耗时。"
+                ),
             },
             "content_provider_initialization": {
                 "detected": bool(provider_init),
                 "slices": provider_init,
             },
             "top_bottlenecks": top_bottlenecks,
-            "warnings": [],
+            "top_bottlenecks_semantics": {
+                "data_source": "android_startup_opinionated_breakdown",
+                "duration_kind": "exclusive_startup_attribution",
+                "mutually_exclusive": True,
+                "usage": "bottleneck_ranking",
+            },
+            "warnings": [
+                "Raw 主线程 Slice 可能嵌套或重叠；禁止累加，"
+                "也不得作为相互独立的启动瓶颈排名。"
+            ],
             "analysis_duration_ms": duration_ms,
             "error_type": None,
             "summary": (
@@ -594,8 +625,8 @@ ORDER BY section, rank;
             "Running": "主线程 CPU 运行",
             "R": "主线程可运行等待调度",
             "R+": "主线程抢占/可运行等待",
-            "choreographer_do_frame": "首帧 Choreographer#doFrame",
-            "bind_application": "Application 绑定/初始化",
+            "choreographer_do_frame": "首帧 Choreographer exclusive 归因",
+            "bind_application": "App binding 启动路径（非业务 onCreate 独占耗时）",
             "activity_start": "Activity 创建",
             "activity_resume": "Activity Resume",
             "inflate": "布局 Inflate",
@@ -623,6 +654,7 @@ ORDER BY section, rank;
                         3,
                     ) if startup_duration_ms > 0 else None,
                     "event_count": cls._int(row.get("event_count")) or 0,
+                    "duration_kind": "exclusive_startup_attribution",
                 }
             )
         return result
@@ -648,6 +680,7 @@ ORDER BY section, rank;
                 "stage": reason,
                 "duration_ms": round(breakdown[reason]["duration_ms"], 6),
                 "event_count": breakdown[reason]["event_count"],
+                "duration_kind": "exclusive_startup_attribution",
             }
             for reason in stage_reasons
             if reason in breakdown
@@ -738,6 +771,7 @@ ORDER BY section, rank;
             "target_startup_count": 0,
             "main_thread": None,
             "long_main_thread_slices": [],
+            "long_main_thread_slices_semantics": None,
             "binder": None,
             "io": None,
             "gc": None,
@@ -746,6 +780,7 @@ ORDER BY section, rank;
             "application_initialization": None,
             "content_provider_initialization": None,
             "top_bottlenecks": [],
+            "top_bottlenecks_semantics": None,
             "warnings": [],
             "analysis_duration_ms": duration_ms,
             "error_type": error_type,

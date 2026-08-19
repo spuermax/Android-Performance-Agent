@@ -71,6 +71,46 @@ class ExampleApp : Application() {
     assert all(match["evidence"] == "ExampleApp 18.000 ms" for match in result["matches"])
 
 
+def test_manifest_application_without_class_evidence_is_low_confidence(
+    tmp_path: Path,
+) -> None:
+    write_project(tmp_path)
+
+    result = execute(
+        tmp_path,
+        plan(
+            (
+                "APPLICATION_INITIALIZATION",
+                "exclusive bind_application 19.156 ms; raw bindApplication 49.951 ms",
+            )
+        ),
+    )
+
+    manifest = next(
+        match for match in result["matches"]
+        if match["file_path"].endswith("AndroidManifest.xml")
+    )
+    assert manifest["confidence"] == "LOW"
+    assert "只证明它参与启动" in manifest["reason"]
+
+
+def test_manifest_application_lifecycle_without_class_name_is_medium(
+    tmp_path: Path,
+) -> None:
+    write_project(tmp_path)
+
+    result = execute(
+        tmp_path,
+        plan(("APPLICATION_INITIALIZATION", "Application.onCreate 8.000 ms")),
+    )
+
+    manifest = next(
+        match for match in result["matches"]
+        if match["file_path"].endswith("AndroidManifest.xml")
+    )
+    assert manifest["confidence"] == "MEDIUM"
+
+
 def test_locates_content_provider_source(tmp_path: Path) -> None:
     write_project(tmp_path)
     (tmp_path / "app/src/main/java/com/example/app/StartupProvider.kt").write_text(
@@ -185,6 +225,80 @@ class MainActivity : Activity() {
 
     assert {"BINDER_IPC", "FIRST_FRAME_WORK"}.issubset(categories(result))
     assert len(result["matches"]) >= 2
+
+
+def test_deduplicates_same_symbol_and_collects_matched_lines(tmp_path: Path) -> None:
+    write_project(tmp_path)
+    (tmp_path / "app/src/main/java/com/example/app/MainActivity.kt").write_text(
+        """package com.example.app
+class MainActivity : Activity() {
+    override fun onCreate(state: Bundle?) {
+        layoutInflater.inflate(R.layout.main, null)
+    }
+}
+""",
+        encoding="utf-8",
+    )
+
+    result = execute(
+        tmp_path,
+        plan(("LONG_MAIN_THREAD_TASK", "Raw main-thread Slice 20.000 ms")),
+    )
+
+    on_create = [
+        match for match in result["matches"]
+        if match["file_path"].endswith("MainActivity.kt")
+        and match["symbol"] == "onCreate"
+    ]
+    assert len(on_create) == 1
+    assert on_create[0]["matched_lines"] == [3, 4]
+
+
+def test_symbol_deduplication_keeps_highest_confidence(tmp_path: Path) -> None:
+    tool = LocateStartupBottleneckSourceTool(allowed_project_path=tmp_path)
+
+    result = tool._deduplicate_and_sort(
+        [
+            {
+                "category": "FIRST_FRAME_WORK",
+                "file_path": "app/src/main/MainActivity.kt",
+                "line": 17,
+                "symbol": "onCreate",
+                "confidence": "LOW",
+            },
+            {
+                "category": "FIRST_FRAME_WORK",
+                "file_path": "app/src/main/MainActivity.kt",
+                "line": 18,
+                "symbol": "onCreate",
+                "confidence": "HIGH",
+            },
+        ]
+    )
+
+    assert len(result) == 1
+    assert result[0]["confidence"] == "HIGH"
+    assert result[0]["line"] == 18
+    assert result[0]["matched_lines"] == [17, 18]
+
+
+def test_locator_consumes_raw_slice_localization_hints(tmp_path: Path) -> None:
+    write_project(tmp_path)
+    (tmp_path / "app/src/main/java/com/example/app/MainActivity.kt").write_text(
+        "class MainActivity { fun onCreate() = Unit }",
+        encoding="utf-8",
+    )
+    optimization_plan = plan()
+    optimization_plan["source_localization_hints"] = [
+        {
+            "category": "LONG_MAIN_THREAD_TASK",
+            "evidence": "Raw Slice MainActivity.onCreate；仅用于源码定位。",
+        }
+    ]
+
+    result = execute(tmp_path, optimization_plan)
+
+    assert "LONG_MAIN_THREAD_TASK" in categories(result)
 
 
 def test_unresolved_when_evidence_has_no_reliable_source_match(tmp_path: Path) -> None:

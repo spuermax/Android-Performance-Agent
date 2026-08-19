@@ -53,15 +53,38 @@ def test_optimization_application_initialization(tmp_path: Path) -> None:
     analysis = base_analysis()
     analysis["application_initialization"] = {
         "detected": True,
-        "slices": [{"name": "bindApplication", "duration_ms": 40.0}],
+        "slices": [{"name": "bindApplication", "duration_ms": 49.951}],
     }
+    analysis["startup_stages"] = [
+        {"stage": "bind_application", "duration_ms": 19.156, "event_count": 3}
+    ]
 
     result = execute(tmp_path, analysis)
 
     assert "APPLICATION_INITIALIZATION" in categories(result)
     recommendation = result["recommendations"][0]
-    assert recommendation["severity"] == "HIGH"
-    assert "bindApplication 40.000 ms" in recommendation["evidence"]
+    assert recommendation["severity"] == "MEDIUM"
+    assert result["bottlenecks"][0]["impact_ms"] == 19.156
+    assert "bind_application 19.156 ms" in recommendation["evidence"]
+    assert "bindApplication 49.951 ms" in recommendation["evidence"]
+    assert "未提供业务 Application.onCreate 类级耗时证据" in (
+        recommendation["evidence"]
+    )
+    assert "不能把该时长归因" in recommendation["reason"]
+
+
+def test_optimization_does_not_attribute_raw_bind_application_alone(
+    tmp_path: Path,
+) -> None:
+    analysis = base_analysis()
+    analysis["application_initialization"] = {
+        "detected": True,
+        "slices": [{"name": "bindApplication", "duration_ms": 49.951}],
+    }
+
+    result = execute(tmp_path, analysis)
+
+    assert "APPLICATION_INITIALIZATION" not in categories(result)
 
 
 def test_optimization_content_provider(tmp_path: Path) -> None:
@@ -182,10 +205,12 @@ def test_optimization_long_main_thread_slice(tmp_path: Path) -> None:
 
     result = execute(tmp_path, analysis)
 
-    recommendation = result["recommendations"][0]
-    assert recommendation["category"] == "LONG_MAIN_THREAD_TASK"
-    assert recommendation["severity"] == "HIGH"
-    assert "inflate 70.000 ms" in recommendation["evidence"]
+    assert result["recommendations"] == []
+    hint = result["source_localization_hints"][0]
+    assert hint["category"] == "LONG_MAIN_THREAD_TASK"
+    assert hint["ranking_eligible"] is False
+    assert "inflate 70.000 ms" in hint["evidence"]
+    assert "禁止相加" in hint["evidence"]
 
 
 def test_optimization_dex_and_class(tmp_path: Path) -> None:
@@ -200,7 +225,7 @@ def test_optimization_dex_and_class(tmp_path: Path) -> None:
     recommendation = result["recommendations"][0]
     assert recommendation["category"] == "DEX_CLASS_LOADING"
     assert "Baseline Profile" in recommendation["suggestion"]
-    assert "V0.4 不生成 Profile" in recommendation["suggestion"]
+    assert "当前版本不生成 Profile" in recommendation["suggestion"]
 
 
 def test_optimization_skips_dex_class_below_evidence_threshold(
@@ -227,6 +252,11 @@ def test_optimization_uses_top_bottleneck_when_stage_is_absent(
             "event_count": 9,
         }
     ]
+    analysis["long_main_thread_slices"] = [
+        {"name": "Choreographer#doFrame", "duration_ms": 105.563},
+        {"name": "Choreographer#doFrame resynced", "duration_ms": 105.332},
+        {"name": "traversal", "duration_ms": 105.028},
+    ]
 
     result = execute(tmp_path, analysis)
 
@@ -234,6 +264,9 @@ def test_optimization_uses_top_bottleneck_when_stage_is_absent(
     assert recommendation["category"] == "FIRST_FRAME_WORK"
     assert recommendation["severity"] == "HIGH"
     assert "55.000 ms" in recommendation["evidence"]
+    assert "105.563 ms" in recommendation["evidence"]
+    assert "不与 exclusive breakdown 累加" in recommendation["evidence"]
+    assert "LONG_MAIN_THREAD_TASK" not in categories(result)
 
 
 def test_optimization_sorts_multiple_bottlenecks_by_evidence(

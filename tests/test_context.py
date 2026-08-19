@@ -3,13 +3,15 @@ from pathlib import Path
 from agent.context import build_agent_instructions
 
 
-def test_agent_instructions_match_v05_capabilities(tmp_path: Path) -> None:
+def test_agent_instructions_match_v051_capabilities(tmp_path: Path) -> None:
     instructions = build_agent_instructions(tmp_path, "skill content")
 
-    assert "Android Performance Agent V0.5" in instructions
+    assert "Android Performance Agent V0.5.1" in instructions
     assert "Optimization Candidates → Source Localization" in instructions
     assert "analyze_perfetto_trace" in instructions
     assert "locate_startup_bottleneck_source" in instructions
+    assert "exclusive 归因" in instructions
+    assert "bindApplication raw 父 Slice 不等于" in instructions
     assert "Macrobenchmark 阶段" not in instructions
     assert "Android Performance Agent V0.1" not in instructions
 
