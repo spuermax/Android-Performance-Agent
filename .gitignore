@@ -5,3 +5,6 @@ __pycache__/
 .env
 .idea/
 .DS_Store
+harness/standalone-macrobenchmark/.gradle/
+harness/standalone-macrobenchmark/**/build/
+harness/results/
