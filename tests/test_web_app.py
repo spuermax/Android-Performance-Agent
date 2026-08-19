@@ -16,6 +16,7 @@ def reset_web_state() -> None:
                 "running": False,
                 "status": "idle",
                 "stop_requested": False,
+                "reached_max_steps": False,
                 "pid": None,
                 "returncode": None,
                 "project_path": "",
@@ -262,8 +263,76 @@ def test_run_agent_reports_requested_stop_as_stopped(
     with web_app.lock:
         web_app.state["running"] = True
         web_app.state["stop_requested"] = True
+        web_app.state["dashboard"]["measure"]["status"] = "running"
 
     web_app.run_agent("/project", "task", 15)
 
     assert web_app.state["status"] == "stopped"
     assert web_app.state["returncode"] == -15
+    assert web_app.state["dashboard"]["measure"]["status"] == "stopped"
+
+
+def test_run_agent_reports_max_steps_as_incomplete(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeProcess:
+        pid = 1234
+        stdout: list[str] = []
+
+        def poll(self) -> int:
+            return 0
+
+        def wait(self) -> int:
+            return 0
+
+    monkeypatch.setattr(web_app.subprocess, "Popen", lambda *_args, **_kwargs: FakeProcess())
+    with web_app.lock:
+        web_app.state["running"] = True
+        web_app.state["reached_max_steps"] = True
+
+    web_app.run_agent("/project", "task", 15)
+
+    assert web_app.state["status"] == "incomplete"
+    assert web_app.state["returncode"] == 0
+
+
+def test_run_agent_marks_running_section_failed_on_process_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeProcess:
+        pid = 1234
+        stdout: list[str] = []
+
+        def poll(self) -> int:
+            return 1
+
+        def wait(self) -> int:
+            return 1
+
+    monkeypatch.setattr(web_app.subprocess, "Popen", lambda *_args, **_kwargs: FakeProcess())
+    with web_app.lock:
+        web_app.state["running"] = True
+        web_app.state["dashboard"]["analyze"]["status"] = "running"
+
+    web_app.run_agent("/project", "task", 15)
+
+    assert web_app.state["status"] == "failed"
+    assert web_app.state["dashboard"]["analyze"]["status"] == "failed"
+
+
+@pytest.mark.parametrize(
+    ("final_status", "expected_section_status"),
+    [("stopped", "stopped"), ("failed", "failed")],
+)
+def test_finish_running_dashboard_sections(
+    final_status: str,
+    expected_section_status: str,
+) -> None:
+    dashboard = web_app.empty_dashboard()
+    dashboard["measure"]["status"] = "running"
+    dashboard["project"]["status"] = "success"
+
+    web_app.finish_running_dashboard_sections(dashboard, final_status)
+
+    assert dashboard["measure"]["status"] == expected_section_status
+    assert dashboard["project"]["status"] == "success"

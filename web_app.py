@@ -90,6 +90,7 @@ state: dict[str, Any] = {
     "running": False,
     "status": "idle",
     "stop_requested": False,
+    "reached_max_steps": False,
     "pid": None,
     "returncode": None,
     "project_path": "",
@@ -123,6 +124,7 @@ def reserve_agent_run(project_path: str, task: str) -> bool:
                 "running": True,
                 "status": "running",
                 "stop_requested": False,
+                "reached_max_steps": False,
                 "pid": None,
                 "returncode": None,
                 "project_path": project_path,
@@ -255,6 +257,19 @@ def request_agent_stop() -> tuple[bool, str]:
 
 def _section_status(result: dict[str, Any]) -> str:
     return "success" if result.get("success") is True else "failed"
+
+
+def finish_running_dashboard_sections(
+    dashboard: dict[str, Any],
+    final_status: str,
+) -> None:
+    """Resolve any in-flight pipeline section when the Agent can no longer run."""
+    if final_status not in {"stopped", "failed"}:
+        return
+    for section_name in ("project", "device", "measure", "analyze", "plan", "locate"):
+        section = dashboard.get(section_name)
+        if isinstance(section, dict) and section.get("status") == "running":
+            section["status"] = final_status
 
 
 def _first_ready_device(result: dict[str, Any]) -> dict[str, Any] | None:
@@ -401,6 +416,7 @@ def apply_agent_event(event: dict[str, Any]) -> None:
     if event_type == "final":
         with lock:
             state["dashboard"]["final_text"] = event.get("text")
+            state["reached_max_steps"] = event.get("reached_max_steps") is True
         return
 
     if event_type == "run_failed":
@@ -469,6 +485,7 @@ def run_agent(project_path: str, task: str, max_steps: int) -> None:
     finally:
         with lock:
             stopped = bool(state["stop_requested"])
+            reached_max_steps = bool(state["reached_max_steps"])
             if process is child:
                 process = None
             if agent_thread is threading.current_thread():
@@ -478,11 +495,15 @@ def run_agent(project_path: str, task: str, max_steps: int) -> None:
             state["pid"] = None
             state["current_tool"] = None
             if stopped:
-                state["status"] = "stopped"
+                final_status = "stopped"
+            elif reached_max_steps:
+                final_status = "incomplete"
             elif code == 0:
-                state["status"] = "completed"
+                final_status = "completed"
             else:
-                state["status"] = "failed"
+                final_status = "failed"
+            state["status"] = final_status
+            finish_running_dashboard_sections(state["dashboard"], final_status)
 
 
 def shutdown_agent() -> None:

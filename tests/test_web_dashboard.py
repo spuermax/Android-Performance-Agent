@@ -8,6 +8,7 @@ def reset() -> None:
         web_app.state["dashboard"] = web_app.empty_dashboard("/project")
         web_app.state["current_tool"] = None
         web_app.state["status"] = "running"
+        web_app.state["reached_max_steps"] = False
         web_app.state["logs"] = []
 
 
@@ -32,7 +33,24 @@ def test_machine_event_line_is_not_added_to_human_log() -> None:
     payload = web_app.EVENT_PREFIX + '{"type":"final","text":"done","step_count":2,"reached_max_steps":false}'
     web_app.handle_process_line(payload)
     assert web_app.state["dashboard"]["final_text"] == "done"
+    assert web_app.state["reached_max_steps"] is False
     assert web_app.state["logs"] == []
+
+
+def test_final_event_preserves_max_steps_state() -> None:
+    reset()
+
+    web_app.apply_agent_event(
+        {
+            "type": "final",
+            "text": "达到最大执行步数",
+            "step_count": 15,
+            "reached_max_steps": True,
+        }
+    )
+
+    assert web_app.state["dashboard"]["final_text"] == "达到最大执行步数"
+    assert web_app.state["reached_max_steps"] is True
 
 
 def test_dashboard_collects_project_device_analysis_and_plan_results() -> None:
@@ -122,3 +140,5 @@ def test_dashboard_html_uses_real_perfetto_bottleneck_fields() -> None:
 
     assert "item.label||item.reason" in html
     assert "item.percentage_of_startup" in html
+    assert "Incomplete · Max Steps Reached" in html
+    assert ".step.stopped" in html
