@@ -14,6 +14,7 @@ from tools.benchmark_readiness_tool import InspectBenchmarkReadinessTool
 from tools.file_tool import ReadProjectFileTool
 from tools.gradle_tool import GradleBuildTool
 from tools.macrobenchmark_tool import RunMacrobenchmarkTool
+from tools.perfetto_analysis_tool import AnalyzePerfettoTraceTool
 from tools.project_tool import InspectProjectTool
 from tools.registry import ToolRegistry
 from tools.search_tool import SearchProjectTextTool
@@ -22,7 +23,7 @@ from tools.standalone_macrobenchmark_tool import RunStandaloneMacrobenchmarkTool
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Android Performance Agent V0.2.7 - minimal Tool Calling agent."
+        description="Android Performance Agent V0.3 - minimal Tool Calling agent."
     )
     parser.add_argument("project_path", help="Path to the Android Gradle project.")
     parser.add_argument(
@@ -62,6 +63,7 @@ def main() -> int:
     registry.register(RunMacrobenchmarkTool(allowed_project_path=project_path))
     registry.register(InspectBenchmarkReadinessTool(allowed_project_path=project_path))
     registry.register(RunStandaloneMacrobenchmarkTool(allowed_project_path=project_path))
+    registry.register(AnalyzePerfettoTraceTool(allowed_project_path=project_path))
 
     try:
         llm = DeepSeekResponsesClient.from_env()

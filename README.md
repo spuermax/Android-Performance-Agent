@@ -1,6 +1,6 @@
 # Android Performance Agent
 
-> V0.2.7 开发中
+> V0.3 开发中
 
 使用 Python 3.12 + DeepSeek 的 Android 性能分析 Agent，通过 LLM Tool Calling 自主选择并调用工具。
 
@@ -17,6 +17,7 @@
 - `run_macrobenchmark`
 - `inspect_benchmark_readiness`
 - `run_standalone_macrobenchmark`
+- `analyze_perfetto_trace`
 - Android module 类型识别
 - DeepSeek Agent Loop
 
@@ -50,6 +51,12 @@ ProfileInstaller 条件。它检查的是设备中的 APK，不根据源码或 G
 通过运行时 `targetPackage` 测量已经安装的目标 App。Harness 不引用目标项目源码，
 不会修改目标项目的 settings、build 文件、Manifest 或业务代码。正式 TTID/TTFD
 仍只读取本轮 Benchmark JSON，并同时收集本轮 Perfetto trace。
+
+`analyze_perfetto_trace` 使用官方 Perfetto Trace Processor SQL 分析单个启动
+Trace，返回 App Startup 区间、主线程长 Slice、Binder、I/O、GC、CPU
+调度、首帧阶段和排序后的瓶颈事实。Tool 不会让 LLM 直接读取原始
+二进制 Trace，也不在 Tool 内生成优化建议。运行前需要在 `PATH` 中安装
+`trace_processor_shell`/`trace_processor`，或配置 `TRACE_PROCESSOR_SHELL`。
 
 ## 最简单的使用流程
 
@@ -93,5 +100,7 @@ cp .env.example .env
 
 所有项目读取和构建工具都绑定最初指定的 Android 项目目录，不能越界访问其他路径。Gradle 输出会在 Tool Layer 中清洗和分类，再交给 LLM 判断，以减少噪音和上下文开销。
 
-V0.2.7 已同时支持项目内已有 Macrobenchmark 和 Agent 自带的 Standalone Macrobenchmark Harness，可从 Benchmark JSON 读取真实 TTID/TTFD，并定位对应 Perfetto trace。当前只收集 trace 文件，不分析 Perfetto；性能判断与后续决策仍交给 LLM。
+V0.3 在两种 Macrobenchmark Measure 方式之上增加了 Perfetto Startup
+自动事实提取。Tool 负责结构化解析，启动瓶颈解释和优化建议仍由 LLM
+根据 Tool Result 决策；本版本不会自动修改业务代码。
 项目不使用 RAG、LangChain 或 LangGraph。

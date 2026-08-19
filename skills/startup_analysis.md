@@ -19,7 +19,7 @@ Measure → Analyze → Optimize → Verify
 9. readiness 通过后，Agent 可决定调用 run_standalone_macrobenchmark；未通过则报告真实阻塞。
 10. 只从本轮 Benchmark JSON 读取 TTID / TTFD 等正式指标。
 11. 定位本轮生成的 Perfetto Trace。
-12. 在后续阶段分析主线程启动关键路径。
+12. 调用 analyze_perfetto_trace 提取主线程、Binder、I/O、GC、CPU 与首帧事实。
 13. 重点排查：
    - Application 初始化
    - ContentProvider 自动初始化
@@ -33,7 +33,7 @@ Measure → Analyze → Optimize → Verify
 15. 修改后重新执行 Macrobenchmark。
 16. 对比优化前后结果，确认收益和回归风险。
 
-## V0.2.7 能力边界
+## V0.3 能力边界
 
 当前可使用：
 
@@ -46,11 +46,13 @@ Measure → Analyze → Optimize → Verify
 - run_macrobenchmark
 - inspect_benchmark_readiness
 - run_standalone_macrobenchmark
+- analyze_perfetto_trace
 
 这些 Tool 是供 Agent 自主决策的独立能力，不是 Python 固定 Workflow。
 当前可以运行已有 Macrobenchmark，也可以对 readiness 通过的已安装 APK 使用 Agent
 自带 Standalone Harness。两种方式都从 Benchmark JSON 获取正式 TTID/TTFD，
-同时定位 Perfetto trace 文件；尚不能分析 Perfetto 内容。
+并可将单个 Perfetto trace 交给 `analyze_perfetto_trace` 提取启动性能事实。
+Tool 不会生成优化结论，解释和建议仍由 LLM 完成。
 
 不能根据 `am start -W` 的 ThisTime、TotalTime 或 WaitTime 判断应用“启动快或慢”。
 - TTID / TTFD 的唯一数据源是 AndroidX Benchmark JSON，不解析 Gradle Console 数字。
@@ -66,3 +68,6 @@ Measure → Analyze → Optimize → Verify
 - 有可用的项目内 Macrobenchmark Startup Test 时，优先调用 `run_macrobenchmark`。
 - 没有项目内 Macrobenchmark 时，不得创建 module 或修改用户工程；先调用 `inspect_benchmark_readiness`，通过后再由 Agent 决定是否调用 `run_standalone_macrobenchmark`。
 - readiness 未通过时，明确报告设备上实际 APK 的阻塞原因，不 suppress 可靠性错误。
+- Macrobenchmark 返回 Trace 后，可由 Agent 决定调用 `analyze_perfetto_trace`；不得将该步骤写死为 Python Workflow。
+- Perfetto 事实必须来自 Trace Processor SQL，不根据文件名、Gradle Console 或 LLM 猜测。
+- V0.3 只分析 Android Startup，不自动修改代码，不执行 Baseline Profile、Startup Profile 或 Before/After 优化。
