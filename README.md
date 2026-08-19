@@ -84,6 +84,10 @@ V0.5.1 收紧了 Perfetto evidence 语义：瓶颈排名以
 父 Slice 不等于业务 `Application.onCreate` 耗时；没有类级 Trace 证据时，
 只能定位为 App binding/Application 启动路径候选。源码候选按
 `category + file_path + symbol` 聚合，并保留 `matched_lines`。
+Raw hint 除保留最长 Slice 外，还会优先保留包含 package/class/method 标识符的
+Slice，避免源码定位证据因时长排序被截断。Trace Processor 报告的 health issue
+会结构化输出为 `trace_health` 与 `trace_health_issues`；WARNING 不会直接令分析
+失败，但 Agent 必须在结论中披露。
 
 ## 最简单的使用流程
 
@@ -108,6 +112,16 @@ cp .env.example .env
 ```bash
 ./run.sh "/Android项目路径"
 ```
+
+也可以启动本地 Web UI：
+
+```bash
+./web.sh
+```
+
+浏览器默认打开 `http://127.0.0.1:8765`。Web UI 仍通过 `run.sh` 使用同一套
+Agent Loop 与 Tool Registry，不会改成固定 Workflow。详细说明见
+[`README_WEB_UI.md`](README_WEB_UI.md)。
 
 执行全部单元测试：
 

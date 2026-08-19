@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from tools.base import BaseTool, ToolError
@@ -16,6 +17,8 @@ class GenerateStartupOptimizationPlanTool(BaseTool):
     SEVERITY_ORDER = {"HIGH": 3, "MEDIUM": 2, "LOW": 1}
     MIN_EVIDENCE_IMPACT_MS = 3.0
     MIN_EVIDENCE_STARTUP_PERCENTAGE = 1.0
+    RAW_HINT_TOP_SLICES = 5
+    RAW_HINT_MAX_SLICES = 10
 
     @property
     def parameters_schema(self) -> dict[str, Any]:
@@ -392,18 +395,58 @@ class GenerateStartupOptimizationPlanTool(BaseTool):
         slices = cls._valid_slices(analysis.get("long_main_thread_slices"))
         if not slices:
             return []
+        selected_slices = cls._select_raw_localization_slices(slices)
         return [
             {
                 "category": "LONG_MAIN_THREAD_TASK",
                 "evidence": (
-                    cls._slice_evidence("Raw 主线程嵌套 Slice", slices[:5])
+                    cls._slice_evidence(
+                        "Raw 主线程嵌套 Slice",
+                        selected_slices,
+                        max_items=cls.RAW_HINT_MAX_SLICES,
+                    )
                     + "这些 inclusive 时长可能重叠或嵌套，禁止相加，"
                     "也不作为独立瓶颈排名；仅用于源码定位。"
                 ),
                 "duration_kind": "raw_inclusive_slice_duration",
                 "ranking_eligible": False,
+                "selection": (
+                    "top_raw_slices_plus_source_identifier_slices"
+                ),
             }
         ]
+
+    @classmethod
+    def _select_raw_localization_slices(
+        cls,
+        slices: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        selected = list(slices[: cls.RAW_HINT_TOP_SLICES])
+        source_slices = sorted(
+            (item for item in slices if cls._source_identifier_priority(item["name"])),
+            key=lambda item: (
+                -cls._source_identifier_priority(item["name"]),
+                -item["duration_ms"],
+            ),
+        )
+        seen = {(item["name"], item["duration_ms"]) for item in selected}
+        for item in source_slices:
+            key = (item["name"], item["duration_ms"])
+            if key in seen:
+                continue
+            selected.append(item)
+            seen.add(key)
+            if len(selected) >= cls.RAW_HINT_MAX_SLICES:
+                break
+        return selected
+
+    @staticmethod
+    def _source_identifier_priority(name: str) -> int:
+        if re.search(r"\b(?:[a-zA-Z_]\w*\.){2,}[A-Z]\w*\b", name):
+            return 2
+        if re.search(r"\b[A-Z][A-Za-z0-9_]*(?:[#.:][A-Za-z_]\w+)+", name):
+            return 1
+        return 0
 
     @classmethod
     def _dex_class_candidate(
@@ -614,12 +657,17 @@ class GenerateStartupOptimizationPlanTool(BaseTool):
         return None
 
     @staticmethod
-    def _slice_evidence(label: str, slices: list[dict[str, Any]]) -> str:
+    def _slice_evidence(
+        label: str,
+        slices: list[dict[str, Any]],
+        *,
+        max_items: int = 5,
+    ) -> str:
         if not slices:
             return f"{label} 已被 Perfetto 检测，但无可用时长。"
         details = ", ".join(
             f"{item['name']} {item['duration_ms']:.3f} ms"
-            for item in slices[:5]
+            for item in slices[:max_items]
         )
         return f"{label}: {details}。"
 

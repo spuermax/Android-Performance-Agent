@@ -196,6 +196,7 @@ class AnalyzePerfettoTraceTool(BaseTool):
             duration_ms=duration_ms,
             rows=rows,
             important_logs=self._important_logs(query["stderr"]),
+            trace_health_issues=self._trace_health_issues(query["stderr"]),
         )
 
     def _validate_trace_path(self, trace_file: Path) -> None:
@@ -438,6 +439,7 @@ ORDER BY section, rank;
         duration_ms: int,
         rows: list[dict[str, str | None]],
         important_logs: list[str],
+        trace_health_issues: list[dict[str, Any]],
     ) -> dict[str, Any]:
         startup = cls._rows(rows, "startup")[0]
         startup_duration_ms = cls._float(startup.get("duration_ms")) or 0.0
@@ -557,10 +559,16 @@ ORDER BY section, rank;
                 "mutually_exclusive": True,
                 "usage": "bottleneck_ranking",
             },
+            "trace_health": "WARNING" if trace_health_issues else "OK",
+            "trace_health_issues": trace_health_issues,
             "warnings": [
                 "Raw 主线程 Slice 可能嵌套或重叠；禁止累加，"
                 "也不得作为相互独立的启动瓶颈排名。"
-            ],
+            ] + (
+                ["Trace Processor 报告 Trace health warning；最终分析必须披露。"]
+                if trace_health_issues
+                else []
+            ),
             "analysis_duration_ms": duration_ms,
             "error_type": None,
             "summary": (
@@ -748,6 +756,43 @@ ORDER BY section, rank;
         return selected[-10:]
 
     @staticmethod
+    def _trace_health_issues(raw: str) -> list[dict[str, Any]]:
+        lines = [
+            re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", line.rstrip("\r"))
+            for line in raw.splitlines()
+        ]
+        start = next(
+            (
+                index
+                for index, line in enumerate(lines)
+                if "trace health issues" in line.lower()
+            ),
+            None,
+        )
+        if start is None:
+            return []
+
+        issues: list[dict[str, Any]] = []
+        current: dict[str, Any] | None = None
+        for line in lines[start + 1 :]:
+            stripped = line.strip()
+            if not stripped:
+                continue
+            indent = len(line) - len(line.lstrip())
+            if indent == 0 or stripped.startswith("["):
+                break
+            if indent <= 2:
+                current = {"category": stripped, "details": []}
+                issues.append(current)
+            elif current is not None:
+                current["details"].append(stripped)
+            else:
+                issues.append(
+                    {"category": "Trace health issue", "details": [stripped]}
+                )
+        return issues
+
+    @staticmethod
     def _empty_result(
         *,
         trace_file: Path,
@@ -781,6 +826,8 @@ ORDER BY section, rank;
             "content_provider_initialization": None,
             "top_bottlenecks": [],
             "top_bottlenecks_semantics": None,
+            "trace_health": None,
+            "trace_health_issues": [],
             "warnings": [],
             "analysis_duration_ms": duration_ms,
             "error_type": error_type,

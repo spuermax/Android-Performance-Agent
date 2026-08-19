@@ -76,6 +76,8 @@ V0.5.1 可将 Perfetto 事实映射为结构化优化候选，并只读定位相
 - Perfetto 事实必须来自 Trace Processor SQL，不根据文件名、Gradle Console 或 LLM 猜测。
 - 瓶颈排名只使用 `android_startup_opinionated_breakdown` 的 exclusive 归因。Raw main-thread Slice 可能嵌套或重叠，只能用于源码定位，禁止相加或作为独立瓶颈排名。
 - `bindApplication` raw 父 Slice 不等于业务 `Application.onCreate` 耗时；应同时报告 exclusive `bind_application`，没有类级 Slice 时不得把耗时归因给自定义 Application 类。
+- Raw 源码定位 hint 应同时保留最长 Slice 和包含 package/class/method 标识符的 Slice，不得仅按时长截断而丢失强源码 evidence。
+- `trace_health=WARNING` 不直接等于分析失败，但最终报告必须披露结构化 `trace_health_issues`。
 - GC `total_wall_overlap_ms` 只表示 GC wall duration 与 Startup 区间的重叠，不得解释为 Stop-The-World pause。
 - `generate_startup_optimization_plan` 只能消费成功的 `analyze_perfetto_trace` Result，建议必须携带实际 evidence 和优先级。
 - 所有优化候选的统一最低证据阈值为 `impact_ms >= 3` 或占 Startup `>= 1%`；未达阈值时，不生成“异步初始化”等泛化建议。
@@ -83,5 +85,6 @@ V0.5.1 可将 Perfetto 事实映射为结构化优化候选，并只读定位相
 - 源码定位必须基于优化候选中的真实 evidence；普通 API 或生命周期方法的存在性只能形成带置信度的候选，不能直接证明瓶颈。
 - 源码候选按 `category + file_path + symbol` 聚合；同一 symbol 的多次文本命中放入 `matched_lines`，不重复输出。
 - Trace 明确包含类名且与 Manifest/Source 一致时可为 HIGH；只有 `bindApplication` 且 Manifest 注册自定义 Application 时只能为 LOW；明确有 Application lifecycle 但无类名时可为 MEDIUM。
+- 通用生命周期方法不能跨类别自动获得 MEDIUM：I/O、Binder、Long Task 只有普通 `onCreate` 命中时仍为 LOW；必须有类/方法级 evidence 或类别直接语义关系才能提高置信度。
 - 找不到明确关联时返回 `unresolved`，不得猜测；所有读取必须限制在指定项目和 target module 内。
 - V0.5.1 不自动修改或提交代码，不生成 Baseline Profile/Startup Profile，不执行重新 Measure 或 Before/After。

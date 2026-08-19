@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Android Performance Agent</title>
+<style>
+:root{color-scheme:dark;--bg:#0b1020;--panel:#121933;--border:#2a3458;--text:#ecf0ff;--muted:#99a4c7;--accent:#78a2ff;--good:#52d273;--bad:#ff6f7e}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+.shell{max-width:1180px;margin:auto;padding:24px}.head{display:flex;justify-content:space-between;align-items:center;margin-bottom:18px}
+h1{font-size:22px;margin:0}.sub{color:var(--muted);font-size:13px;margin-top:5px}.status{font-size:13px;color:var(--muted)}
+.grid{display:grid;grid-template-columns:380px 1fr;gap:16px}.card{background:var(--panel);border:1px solid var(--border);border-radius:14px;padding:16px}
+label{display:block;font-size:12px;color:var(--muted);margin:12px 0 7px}input,textarea,select{width:100%;background:#0d1430;color:var(--text);border:1px solid var(--border);border-radius:10px;padding:10px}
+textarea{min-height:155px;resize:vertical}button{border:1px solid var(--border);background:#1a2447;color:var(--text);border-radius:10px;padding:10px 13px;cursor:pointer}
+button.primary{background:var(--accent);color:#071128;border:0;font-weight:700}button.danger{background:#3a1820;color:#ffc0c7}.actions{display:flex;gap:8px;margin-top:14px}
+.metrics{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:12px}.metric{background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:11px}.metric small{color:var(--muted)}.metric strong{display:block;margin-top:4px}
+pre{height:620px;margin:0;background:#070c18;border:1px solid #20294a;border-radius:12px;padding:14px;overflow:auto;white-space:pre-wrap;word-break:break-word;font:12px/1.55 Menlo,monospace}
+@media(max-width:900px){.grid{grid-template-columns:1fr}.metrics{grid-template-columns:repeat(2,1fr)}pre{height:420px}}
+</style>
+</head>
+<body>
+<div class="shell">
+  <div class="head">
+    <div><h1>Android Performance Agent</h1><div class="sub">Local Web UI · 浏览器入口</div></div>
+    <div class="status" id="statusText">空闲</div>
+  </div>
+
+  <div class="grid">
+    <section class="card">
+      <label>Android 项目路径</label>
+      <input id="projectPath" placeholder="/Users/.../AndroidProject">
+
+      <label>预设任务</label>
+      <select id="preset">
+        <option value="full">完整启动分析</option>
+        <option value="readiness">只检查环境</option>
+        <option value="measure">只执行 Measure</option>
+        <option value="custom">自定义</option>
+      </select>
+
+      <label>Agent Task</label>
+      <textarea id="task"></textarea>
+
+      <label>最大步骤</label>
+      <input id="maxSteps" type="number" value="15" min="1" max="50">
+
+      <div class="actions">
+        <button id="runBtn" class="primary">开始执行</button>
+        <button id="stopBtn" class="danger" disabled>停止</button>
+      </div>
+    </section>
+
+    <section>
+      <div class="metrics">
+        <div class="metric"><small>状态</small><strong id="mStatus">Idle</strong></div>
+        <div class="metric"><small>PID</small><strong id="mPid">—</strong></div>
+        <div class="metric"><small>Return Code</small><strong id="mCode">—</strong></div>
+        <div class="metric"><small>日志行数</small><strong id="mLines">0</strong></div>
+      </div>
+      <div class="card">
+        <pre id="logs">等待执行…</pre>
+      </div>
+    </section>
+  </div>
+</div>
+
+<script>
+const presets={
+ full:"对当前 Android 项目执行启动性能分析闭环：基于真实 Tool Result 完成项目检查、真实 Macrobenchmark 测量、Perfetto Trace 分析、生成有证据的启动优化候选，并使用 locate_startup_bottleneck_source 定位对应源码。所有性能结论必须来自真实 Tool Result；LOW/MEDIUM 只能作为候选；无法可靠关联的必须进入 unresolved，禁止猜测。",
+ readiness:"检查当前 Android 项目是否具备继续进行启动性能分析的条件。检查项目、application target、在线设备、Benchmark readiness，只基于真实 Tool Result 报告阻塞项。",
+ measure:"只执行启动性能 Measure 阶段。识别目标应用与设备，使用可用 Macrobenchmark 获得真实 Benchmark JSON、TTID/TTFD 与 Perfetto Trace，不进入优化或源码修改。",
+ custom:""
+};
+const csrfToken="__ANDROID_PERF_CSRF_TOKEN__";
+const $=id=>document.getElementById(id);
+function applyPreset(){ $("task").value=presets[$("preset").value]||""; }
+$("preset").addEventListener("change",applyPreset); applyPreset();
+
+async function postJson(path,body){
+ const res=await fetch(path,{method:"POST",headers:{
+  "Content-Type":"application/json","X-CSRF-Token":csrfToken
+ },body:JSON.stringify(body)});
+ let data;
+ try{data=await res.json();}catch(_error){throw new Error(`服务返回异常（HTTP ${res.status}）`);}
+ if(!res.ok||!data.ok) throw new Error(data.error||`请求失败（HTTP ${res.status}）`);
+ return data;
+}
+
+$("runBtn").addEventListener("click",async()=>{
+ try{
+  await postJson("/api/run",{
+   project_path:$("projectPath").value.trim(),task:$("task").value.trim(),max_steps:Number($("maxSteps").value||15)
+  });
+  await refresh();
+ }catch(error){alert(error.message||"启动失败");}
+});
+$("stopBtn").addEventListener("click",async()=>{
+ try{await postJson("/api/stop",{});}
+ catch(error){alert(error.message||"停止失败");}
+});
+async function refresh(){
+ try{
+  const s=await (await fetch("/api/status")).json(), lines=s.logs||[];
+  $("logs").textContent=lines.length?lines.join("\n"):"等待执行…";
+  if(s.running) $("logs").scrollTop=$("logs").scrollHeight;
+  $("runBtn").disabled=!!s.running; $("stopBtn").disabled=!s.running;
+  $("statusText").textContent=s.running?"运行中":(s.returncode===0?"完成":(s.returncode===null?"空闲":"失败"));
+  $("mStatus").textContent=s.running?"Running":(s.returncode===0?"Completed":(s.returncode===null?"Idle":"Failed"));
+  $("mPid").textContent=s.pid??"—"; $("mCode").textContent=s.returncode??"—"; $("mLines").textContent=lines.length;
+ }catch(e){$("statusText").textContent="Web 服务异常";}
+}
+setInterval(refresh,800); refresh();
+</script>
+</body>
+</html>

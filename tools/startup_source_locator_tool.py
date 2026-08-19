@@ -504,10 +504,19 @@ class LocateStartupBottleneckSourceTool(BaseTool):
     ) -> str:
         if exact_evidence:
             return "HIGH"
-        lifecycle = symbol in {"onCreate", "attachBaseContext", "query", "insert"}
-        if lifecycle or (
-            category == "CONTENT_PROVIDER_INITIALIZATION"
-            and "ContentProvider" in line_text
+        if category == "APPLICATION_INITIALIZATION" and symbol in {
+            "onCreate",
+            "attachBaseContext",
+        }:
+            return "MEDIUM"
+        if category == "CONTENT_PROVIDER_INITIALIZATION" and (
+            symbol in {"onCreate", "query", "insert"}
+            or "ContentProvider" in line_text
+        ):
+            return "MEDIUM"
+        if category == "FIRST_FRAME_WORK" and symbol == "onCreate" and any(
+            token in line_text
+            for token in ("setContentView", "setContent", "inflate")
         ):
             return "MEDIUM"
         return "LOW"

@@ -213,6 +213,29 @@ def test_optimization_long_main_thread_slice(tmp_path: Path) -> None:
     assert "禁止相加" in hint["evidence"]
 
 
+def test_raw_hint_retains_source_identifier_slice_beyond_top_five(
+    tmp_path: Path,
+) -> None:
+    analysis = base_analysis()
+    analysis["long_main_thread_slices"] = [
+        {"name": "Choreographer#doFrame", "duration_ms": 105.563},
+        {"name": "Choreographer#doFrame resynced", "duration_ms": 105.332},
+        {"name": "traversal", "duration_ms": 105.028},
+        {"name": "bindApplication", "duration_ms": 49.951},
+        {"name": "activityStart", "duration_ms": 35.0},
+        {
+            "name": "performCreate:com.sample.redex.MainActivity",
+            "duration_ms": 30.0,
+        },
+    ]
+
+    result = execute(tmp_path, analysis)
+
+    hint = result["source_localization_hints"][0]
+    assert "performCreate:com.sample.redex.MainActivity" in hint["evidence"]
+    assert hint["selection"] == "top_raw_slices_plus_source_identifier_slices"
+
+
 def test_optimization_dex_and_class(tmp_path: Path) -> None:
     analysis = base_analysis()
     analysis["startup_stages"] = [

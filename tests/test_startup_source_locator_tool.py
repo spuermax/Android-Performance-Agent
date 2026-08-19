@@ -198,7 +198,25 @@ class ExampleApp : Application() {
     ]
     assert io_matches
     assert any("getSharedPreferences" in match["reason"] for match in io_matches)
-    assert all(match["confidence"] in {"MEDIUM", "LOW"} for match in io_matches)
+    assert all(match["confidence"] == "LOW" for match in io_matches)
+
+
+def test_generic_lifecycle_confidence_is_category_aware(tmp_path: Path) -> None:
+    tool = LocateStartupBottleneckSourceTool(allowed_project_path=tmp_path)
+
+    assert tool._confidence(
+        category="APPLICATION_INITIALIZATION",
+        exact_evidence=False,
+        symbol="onCreate",
+        line_text="override fun onCreate()",
+    ) == "MEDIUM"
+    for category in ("LONG_MAIN_THREAD_TASK", "MAIN_THREAD_IO", "BINDER_IPC"):
+        assert tool._confidence(
+            category=category,
+            exact_evidence=False,
+            symbol="onCreate",
+            line_text="override fun onCreate()",
+        ) == "LOW"
 
 
 def test_returns_multiple_categories_and_matches(tmp_path: Path) -> None:
@@ -292,13 +310,21 @@ def test_locator_consumes_raw_slice_localization_hints(tmp_path: Path) -> None:
     optimization_plan["source_localization_hints"] = [
         {
             "category": "LONG_MAIN_THREAD_TASK",
-            "evidence": "Raw Slice MainActivity.onCreate；仅用于源码定位。",
+            "evidence": (
+                "Raw Slice performCreate:com.example.app.MainActivity 30.000 ms；"
+                "仅用于源码定位。"
+            ),
         }
     ]
 
     result = execute(tmp_path, optimization_plan)
 
     assert "LONG_MAIN_THREAD_TASK" in categories(result)
+    main_activity = next(
+        match for match in result["matches"]
+        if match["file_path"].endswith("MainActivity.kt")
+    )
+    assert main_activity["confidence"] == "HIGH"
 
 
 def test_unresolved_when_evidence_has_no_reliable_source_match(tmp_path: Path) -> None:

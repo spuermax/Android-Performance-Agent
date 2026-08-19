@@ -64,7 +64,13 @@ def normal_csv() -> str:
 """
 
 
-def mock_processor(monkeypatch, stdout: str, *, returncode: int = 0):
+def mock_processor(
+    monkeypatch,
+    stdout: str,
+    *,
+    returncode: int = 0,
+    stderr: str = "",
+):
     monkeypatch.setattr(
         AnalyzePerfettoTraceTool,
         "_find_trace_processor",
@@ -74,7 +80,11 @@ def mock_processor(monkeypatch, stdout: str, *, returncode: int = 0):
 
     def fake_run(command, **kwargs):
         calls.append((command, kwargs))
-        return completed(stdout, returncode, "SQL error" if returncode else "")
+        return completed(
+            stdout,
+            returncode,
+            stderr or ("SQL error" if returncode else ""),
+        )
 
     monkeypatch.setattr(
         "tools.perfetto_analysis_tool.subprocess.run",
@@ -173,6 +183,44 @@ def test_perfetto_parses_startup_and_structured_bottlenecks(
     assert "WHERE package = 'com.example.app'" in calls[0][0][3]
     assert calls[0][1]["shell"] is False
     assert calls[0][1]["timeout"] == 120
+
+
+def test_perfetto_structures_trace_health_warning_without_failing(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    trace = create_trace(tmp_path)
+    health_output = """Trace health issues:
+
+  Import errors
+    power_rail_empty_packet: 1
+"""
+    mock_processor(monkeypatch, normal_csv(), stderr=health_output)
+
+    result = create_tool(tmp_path).execute(arguments(trace))
+
+    assert result["success"] is True
+    assert result["trace_health"] == "WARNING"
+    assert result["trace_health_issues"] == [
+        {
+            "category": "Import errors",
+            "details": ["power_rail_empty_packet: 1"],
+        }
+    ]
+    assert any("必须披露" in warning for warning in result["warnings"])
+
+
+def test_perfetto_reports_ok_trace_health_without_issues(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    trace = create_trace(tmp_path)
+    mock_processor(monkeypatch, normal_csv())
+
+    result = create_tool(tmp_path).execute(arguments(trace))
+
+    assert result["trace_health"] == "OK"
+    assert result["trace_health_issues"] == []
 
 
 def test_perfetto_rejects_trace_outside_allowed_roots(tmp_path: Path) -> None:

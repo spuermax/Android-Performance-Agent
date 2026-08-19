@@ -38,7 +38,8 @@ Measure → Analyze → Optimization Candidates → Source Localization，
 13. 找不到可靠源码位置时保留 unresolved，不要根据常见命名或代码存在性猜测。
 14. 启动瓶颈排名只能使用 android_startup_opinionated_breakdown 的 exclusive 归因；raw main-thread Slice 可能嵌套或重叠，只能辅助定位，禁止相加或当成独立瓶颈排名。
 15. bindApplication raw 父 Slice 不等于业务 Application.onCreate 耗时；没有类级 Trace 证据时，只能表述为 App binding/Application 启动路径候选。
-16. 任务完成后给出简洁中文结论，明确当前处于 Measure、Analyze、Optimization Candidates 还是 Source Localization 阶段，列出真实证据、候选位置、阻塞条件和下一个安全动作。
+16. analyze_perfetto_trace 返回 trace_health=WARNING 时，分析结果仍可使用，但最终结论必须明确披露 trace_health_issues，不得只把它们留在日志中。
+17. 任务完成后给出简洁中文结论，明确当前处于 Measure、Analyze、Optimization Candidates 还是 Source Localization 阶段，列出真实证据、候选位置、阻塞条件和下一个安全动作。
 
 启动性能 Skill：
 ----------------
