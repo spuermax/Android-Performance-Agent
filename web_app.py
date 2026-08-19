@@ -85,7 +85,7 @@ def validate_run_payload(body: Any) -> tuple[str, str, int]:
         raise RequestValidationError("JSON 请求体必须是对象")
 
     project_path = str(body.get("project_path") or "").strip()
-    task = str(body.get("task", "")).strip()
+    raw_task = body.get("task")
     if not project_path:
         raise RequestValidationError("项目路径不能为空")
     if len(project_path) > 4_096:
@@ -93,6 +93,9 @@ def validate_run_payload(body: Any) -> tuple[str, str, int]:
     project = Path(project_path).expanduser()
     if not project.is_dir():
         raise RequestValidationError("项目目录不存在")
+    if not isinstance(raw_task, str):
+        raise RequestValidationError("任务必须是字符串")
+    task = raw_task.strip()
     if not task:
         raise RequestValidationError("任务不能为空")
     if len(task) > MAX_TASK_CHARS:
@@ -197,6 +200,8 @@ def run_agent(project_path: str, task: str, max_steps: int) -> None:
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             bufsize=1,
             start_new_session=True,
         )
@@ -212,6 +217,9 @@ def run_agent(project_path: str, task: str, max_steps: int) -> None:
         add_log(f"[Web UI] Agent 进程结束，returncode={code}")
     except Exception as exc:
         add_log(f"[Web UI Error] {type(exc).__name__}: {exc}")
+        if child is not None and child.poll() is None:
+            signal_process_group(child, signal.SIGTERM)
+            escalate_stop(child)
     finally:
         with lock:
             if process is child:

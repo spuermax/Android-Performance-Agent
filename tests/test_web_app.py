@@ -54,6 +54,21 @@ def test_validate_run_payload_rejects_empty_project_path(value: object) -> None:
         )
 
 
+@pytest.mark.parametrize("value", [None, "", " ", False])
+def test_validate_run_payload_rejects_invalid_task(
+    tmp_path: Path,
+    value: object,
+) -> None:
+    with pytest.raises(web_app.RequestValidationError, match="任务"):
+        web_app.validate_run_payload(
+            {
+                "project_path": str(tmp_path),
+                "task": value,
+                "max_steps": 15,
+            }
+        )
+
+
 @pytest.mark.parametrize("value", ["abc", True, 1.5, 0, 51])
 def test_validate_run_payload_rejects_invalid_max_steps(
     tmp_path: Path,
@@ -180,3 +195,47 @@ def test_shutdown_signals_active_agent(monkeypatch: pytest.MonkeyPatch) -> None:
 
     assert signals == [web_app.signal.SIGTERM]
     assert web_app.shutdown_event.is_set()
+
+
+def test_run_agent_terminates_process_group_when_log_reading_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class BrokenStdout:
+        def __iter__(self) -> object:
+            raise UnicodeError("broken output")
+
+    class FakeProcess:
+        pid = 1234
+        stdout = BrokenStdout()
+
+        def __init__(self) -> None:
+            self.running = True
+
+        def poll(self) -> int | None:
+            return None if self.running else -15
+
+    child = FakeProcess()
+    popen_kwargs: dict[str, object] = {}
+    signals: list[object] = []
+
+    def fake_popen(*_args: object, **kwargs: object) -> FakeProcess:
+        popen_kwargs.update(kwargs)
+        return child
+
+    def fake_signal(target: object, sig: object) -> bool:
+        assert target is child
+        signals.append(sig)
+        child.running = False
+        return True
+
+    monkeypatch.setattr(web_app.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(web_app, "signal_process_group", fake_signal)
+
+    web_app.run_agent("/project", "task", 15)
+
+    assert signals == [web_app.signal.SIGTERM]
+    assert popen_kwargs["encoding"] == "utf-8"
+    assert popen_kwargs["errors"] == "replace"
+    assert web_app.process is None
+    assert web_app.state["running"] is False
+    assert web_app.state["returncode"] == -1
