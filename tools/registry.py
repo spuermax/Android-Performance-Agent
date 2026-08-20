@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from redaction import redact_sensitive_data
 from tools.base import BaseTool, ToolError
+from tools.redaction import redact_value
 
 
 class ToolRegistry:
@@ -18,17 +18,28 @@ class ToolRegistry:
     def schemas(self) -> list[dict[str, Any]]:
         return [tool.openai_schema() for tool in self._tools.values()]
 
+    @staticmethod
+    def _safe_result(value: dict[str, Any]) -> dict[str, Any]:
+        redacted = redact_value(value)
+        if isinstance(redacted, dict):
+            return redacted
+        return {
+            "success": False,
+            "error_type": "INVALID_TOOL_RESULT",
+            "message": "Tool Result 不是对象。",
+        }
+
     def execute(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         tool = self._tools.get(name)
         if tool is None:
-            return redact_sensitive_data({
+            return self._safe_result({
                 "success": False,
                 "error_type": "UNKNOWN_TOOL",
                 "message": f"未知 Tool: {name}",
             })
 
         if "_invalid_json" in arguments:
-            return redact_sensitive_data({
+            return self._safe_result({
                 "success": False,
                 "error_type": "INVALID_ARGUMENTS",
                 "message": "模型生成的 Tool 参数不是合法 JSON。",
@@ -36,15 +47,15 @@ class ToolRegistry:
             })
 
         try:
-            return redact_sensitive_data(tool.execute(arguments))
+            return self._safe_result(tool.execute(arguments))
         except ToolError as exc:
-            return redact_sensitive_data({
+            return self._safe_result({
                 "success": False,
                 "error_type": "TOOL_VALIDATION_ERROR",
                 "message": str(exc),
             })
         except Exception as exc:
-            return redact_sensitive_data({
+            return self._safe_result({
                 "success": False,
                 "error_type": "TOOL_RUNTIME_ERROR",
                 "message": f"{type(exc).__name__}: {exc}",

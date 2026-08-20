@@ -13,6 +13,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Mapping
 
+from tools.redaction import redact_text
 from web_status import (
     apply_benchmark_readiness_result,
     finish_dashboard_sections,
@@ -60,6 +61,11 @@ def empty_dashboard(project_path: str = "") -> dict[str, Any]:
         },
         "measure": {
             "status": "pending",
+            "selected_variant": None,
+            "selected_apk": None,
+            "candidates_discovered": None,
+            "candidates_checked": None,
+            "candidate_results": [],
             "ttid_ms": None,
             "ttfd_available": False,
             "ttfd_ms": None,
@@ -95,6 +101,7 @@ def empty_dashboard(project_path: str = "") -> dict[str, Any]:
 state: dict[str, Any] = {
     "running": False,
     "status": "idle",
+    "blocked": False,
     "stop_requested": False,
     "reached_max_steps": False,
     "pid": None,
@@ -117,7 +124,7 @@ class RequestValidationError(ValueError):
 
 def add_log(line: str) -> None:
     with lock:
-        state["logs"].append(line.rstrip("\n"))
+        state["logs"].append(redact_text(line.rstrip("\n")))
         state["logs"] = state["logs"][-MAX_LOG_LINES:]
 
 
@@ -129,6 +136,7 @@ def reserve_agent_run(project_path: str, task: str) -> bool:
             {
                 "running": True,
                 "status": "running",
+                "blocked": False,
                 "stop_requested": False,
                 "reached_max_steps": False,
                 "pid": None,
@@ -322,6 +330,58 @@ def _apply_tool_result(name: str, result: dict[str, Any]) -> None:
                     section[key] = ready.get(key)
             return
 
+        if name == "inspect_build_variants":
+            section = dashboard["measure"]
+            success = result.get("success") is True
+            section.update(
+                {
+                    "status": "pending" if success else "blocked",
+                    "candidates_discovered": result.get("candidate_count"),
+                    "candidate_results": result.get("variants") or [],
+                    "summary": result.get("summary"),
+                }
+            )
+            state["blocked"] = not success
+            if not success:
+                finish_dashboard_sections(dashboard, "blocked")
+            return
+
+        if name == "prepare_benchmark_target":
+            section = dashboard["measure"]
+            success = (
+                result.get("success") is True
+                and result.get("benchmark_ready") is not False
+            )
+            section.update(
+                {
+                    "status": "pending" if success else "blocked",
+                    "selected_variant": result.get("selected_variant"),
+                    "selected_apk": result.get("selected_apk"),
+                    "candidates_discovered": result.get("candidates_discovered"),
+                    "candidates_checked": result.get("candidates_checked"),
+                    "candidate_results": result.get("candidate_results") or [],
+                    "summary": result.get("summary"),
+                }
+            )
+            state["blocked"] = not success
+            if success:
+                dashboard["project"].update(
+                    {
+                        "module": result.get("module")
+                        or dashboard["project"].get("module"),
+                        "application_id": result.get("application_id")
+                        or dashboard["project"].get("application_id"),
+                        "launcher_component": result.get("launcher_component")
+                        or dashboard["project"].get("launcher_component"),
+                    }
+                )
+                for section_name in ("analyze", "plan", "locate"):
+                    if dashboard[section_name].get("status") == "skipped":
+                        dashboard[section_name]["status"] = "pending"
+            else:
+                finish_dashboard_sections(dashboard, "blocked")
+            return
+
         if name == "inspect_benchmark_readiness":
             apply_benchmark_readiness_result(dashboard, result)
             return
@@ -402,6 +462,7 @@ def apply_agent_event(event: dict[str, Any]) -> None:
                     "inspect_app_target": "project",
                     "adb_devices": "device",
                     "inspect_build_variants": "measure",
+                    "prepare_benchmark_target": "measure",
                     "inspect_benchmark_readiness": "measure",
                     "run_macrobenchmark": "measure",
                     "run_standalone_macrobenchmark": "measure",

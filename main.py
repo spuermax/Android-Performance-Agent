@@ -13,6 +13,7 @@ from llm.client import DeepSeekResponsesClient
 from tools.adb_tool import AdbDevicesTool, AdbInstallTool, AdbLaunchAppTool
 from tools.app_target_tool import InspectAppTargetTool
 from tools.benchmark_readiness_tool import InspectBenchmarkReadinessTool
+from tools.benchmark_target_tool import PrepareBenchmarkTargetTool
 from tools.build_variant_tool import InspectBuildVariantsTool
 from tools.file_tool import ReadProjectFileTool
 from tools.gradle_tool import GradleBuildTool
@@ -74,6 +75,7 @@ def main() -> int:
     registry.register(InspectProjectTool(allowed_project_path=project_path))
     registry.register(GradleBuildTool(allowed_project_path=project_path))
     registry.register(InspectBuildVariantsTool(allowed_project_path=project_path))
+    registry.register(PrepareBenchmarkTargetTool(allowed_project_path=project_path))
     registry.register(SearchProjectTextTool(allowed_project_path=project_path))
     registry.register(ReadProjectFileTool(allowed_project_path=project_path))
     registry.register(AdbDevicesTool(allowed_project_path=project_path))

@@ -38,6 +38,19 @@ def test_machine_event_line_is_not_added_to_human_log() -> None:
     assert web_app.state["logs"] == []
 
 
+def test_human_log_is_redacted_before_reaching_dashboard() -> None:
+    reset()
+
+    web_app.add_log(
+        "password=secret repo=https://alice:token@example.com/maven"
+    )
+
+    log = web_app.state["logs"][0]
+    assert "secret" not in log
+    assert "alice" not in log
+    assert "token" not in log
+
+
 def test_final_event_preserves_max_steps_state() -> None:
     reset()
 

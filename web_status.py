@@ -65,5 +65,9 @@ def finish_dashboard_sections(
         if status == "blocked":
             blocked_seen = True
             continue
+        if not blocked_seen and status == "running":
+            section["status"] = "blocked"
+            blocked_seen = True
+            continue
         if blocked_seen and status in {"pending", "running"}:
             section["status"] = "skipped"
