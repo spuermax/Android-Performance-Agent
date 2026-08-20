@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from redaction import redact_sensitive_data
 from tools.base import BaseTool, ToolError
 
 
@@ -20,31 +21,31 @@ class ToolRegistry:
     def execute(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         tool = self._tools.get(name)
         if tool is None:
-            return {
+            return redact_sensitive_data({
                 "success": False,
                 "error_type": "UNKNOWN_TOOL",
                 "message": f"未知 Tool: {name}",
-            }
+            })
 
         if "_invalid_json" in arguments:
-            return {
+            return redact_sensitive_data({
                 "success": False,
                 "error_type": "INVALID_ARGUMENTS",
                 "message": "模型生成的 Tool 参数不是合法 JSON。",
                 "raw_arguments": arguments["_invalid_json"],
-            }
+            })
 
         try:
-            return tool.execute(arguments)
+            return redact_sensitive_data(tool.execute(arguments))
         except ToolError as exc:
-            return {
+            return redact_sensitive_data({
                 "success": False,
                 "error_type": "TOOL_VALIDATION_ERROR",
                 "message": str(exc),
-            }
+            })
         except Exception as exc:
-            return {
+            return redact_sensitive_data({
                 "success": False,
                 "error_type": "TOOL_RUNTIME_ERROR",
                 "message": f"{type(exc).__name__}: {exc}",
-            }
+            })

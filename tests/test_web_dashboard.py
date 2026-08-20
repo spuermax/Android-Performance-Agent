@@ -9,6 +9,7 @@ def reset() -> None:
         web_app.state["current_tool"] = None
         web_app.state["status"] = "running"
         web_app.state["reached_max_steps"] = False
+        web_app.state["blocked"] = False
         web_app.state["logs"] = []
 
 
@@ -142,3 +143,66 @@ def test_dashboard_html_uses_real_perfetto_bottleneck_fields() -> None:
     assert "item.percentage_of_startup" in html
     assert "Incomplete · Max Steps Reached" in html
     assert ".step.stopped" in html
+    assert 'blocked:"Blocked"' in html
+    assert ".step.skipped" in html
+
+
+def test_failed_target_preparation_blocks_measure_and_skips_downstream() -> None:
+    reset()
+
+    web_app.apply_agent_event(
+        {"type": "tool_started", "name": "prepare_benchmark_target"}
+    )
+    web_app.apply_agent_event(
+        {
+            "type": "tool_result",
+            "name": "prepare_benchmark_target",
+            "result": {
+                "success": False,
+                "selected_variant": None,
+                "selected_apk": None,
+                "candidates_checked": 3,
+                "candidate_results": [],
+                "error_type": "NO_BENCHMARK_READY_TARGET",
+                "summary": "所有候选均不满足 readiness。",
+            },
+        }
+    )
+
+    dashboard = web_app.state["dashboard"]
+    assert web_app.state["blocked"] is True
+    assert dashboard["measure"]["status"] == "blocked"
+    assert dashboard["analyze"]["status"] == "skipped"
+    assert dashboard["plan"]["status"] == "skipped"
+    assert dashboard["locate"]["status"] == "skipped"
+
+
+def test_successful_target_preparation_records_selection_and_unblocks() -> None:
+    reset()
+    with web_app.lock:
+        web_app.state["blocked"] = True
+        web_app.state["dashboard"]["analyze"]["status"] = "skipped"
+        web_app.state["dashboard"]["plan"]["status"] = "skipped"
+        web_app.state["dashboard"]["locate"]["status"] = "skipped"
+
+    web_app.apply_agent_event(
+        {
+            "type": "tool_result",
+            "name": "prepare_benchmark_target",
+            "result": {
+                "success": True,
+                "selected_variant": "XiaomiRelease",
+                "selected_apk": "/project/app-release.apk",
+                "candidates_checked": 2,
+                "candidate_results": [{"variant": "HuaweiRelease"}],
+                "summary": "ready",
+            },
+        }
+    )
+
+    dashboard = web_app.state["dashboard"]
+    assert web_app.state["blocked"] is False
+    assert dashboard["measure"]["status"] == "pending"
+    assert dashboard["measure"]["selected_variant"] == "XiaomiRelease"
+    assert dashboard["measure"]["candidates_checked"] == 2
+    assert dashboard["analyze"]["status"] == "pending"

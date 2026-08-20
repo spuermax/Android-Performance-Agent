@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from tools.base import BaseTool, ToolError
+from tools.redaction import redact_text
 
 
 class ReadProjectFileTool(BaseTool):
@@ -10,7 +11,7 @@ class ReadProjectFileTool(BaseTool):
     description = (
         "读取当前 Android 项目内的文本文件，可按行号范围读取。"
         "适合查看 settings.gradle、build.gradle、AndroidManifest.xml、"
-        "gradle.properties、Kotlin/Java 源码等。"
+        "gradle.properties、Kotlin/Java 源码等。敏感凭据会在返回前自动脱敏。"
     )
 
     MAX_LINES = 250
@@ -94,7 +95,7 @@ class ReadProjectFileTool(BaseTool):
             "start_line": start_line,
             "end_line": min(end_line, len(lines)),
             "content": [
-                {"line": start_line + i, "text": line}
+                {"line": start_line + i, "text": redact_text(line)}
                 for i, line in enumerate(selected)
             ],
         }

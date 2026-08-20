@@ -17,6 +17,7 @@ def reset_web_state() -> None:
                 "status": "idle",
                 "stop_requested": False,
                 "reached_max_steps": False,
+                "blocked": False,
                 "pid": None,
                 "returncode": None,
                 "project_path": "",
@@ -312,6 +313,7 @@ def test_run_agent_marks_running_section_failed_on_process_failure(
     monkeypatch.setattr(web_app.subprocess, "Popen", lambda *_args, **_kwargs: FakeProcess())
     with web_app.lock:
         web_app.state["running"] = True
+        web_app.state["blocked"] = True
         web_app.state["dashboard"]["analyze"]["status"] = "running"
 
     web_app.run_agent("/project", "task", 15)
@@ -322,7 +324,11 @@ def test_run_agent_marks_running_section_failed_on_process_failure(
 
 @pytest.mark.parametrize(
     ("final_status", "expected_section_status"),
-    [("stopped", "stopped"), ("failed", "failed")],
+    [
+        ("stopped", "stopped"),
+        ("failed", "failed"),
+        ("blocked", "blocked"),
+    ],
 )
 def test_finish_running_dashboard_sections(
     final_status: str,
@@ -336,3 +342,28 @@ def test_finish_running_dashboard_sections(
 
     assert dashboard["measure"]["status"] == expected_section_status
     assert dashboard["project"]["status"] == "success"
+
+
+def test_run_agent_reports_measure_block_as_blocked(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeProcess:
+        pid = 1234
+        stdout: list[str] = []
+
+        def poll(self) -> int:
+            return 0
+
+        def wait(self) -> int:
+            return 0
+
+    monkeypatch.setattr(web_app.subprocess, "Popen", lambda *_args, **_kwargs: FakeProcess())
+    with web_app.lock:
+        web_app.state["running"] = True
+        web_app.state["blocked"] = True
+        web_app.state["dashboard"]["measure"]["status"] = "blocked"
+
+    web_app.run_agent("/project", "task", 15)
+
+    assert web_app.state["status"] == "blocked"
+    assert web_app.state["dashboard"]["measure"]["status"] == "blocked"

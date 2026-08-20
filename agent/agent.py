@@ -7,6 +7,7 @@ from typing import Any, Callable
 from agent.context import build_agent_instructions, load_startup_skill
 from agent.models import AgentRunState, ToolEvent
 from llm.base import BaseLLMClient
+from tools.redaction import redact_value
 from tools.registry import ToolRegistry
 
 AgentEventSink = Callable[[dict[str, Any]], None]
@@ -48,7 +49,8 @@ class AndroidPerformanceAgent:
         if self.event_sink is None:
             return
         try:
-            self.event_sink({"type": event_type, **payload})
+            safe_payload = redact_value(payload)
+            self.event_sink({"type": event_type, **safe_payload})
         except Exception:
             # UI/telemetry failure must never break the Agent core loop.
             return
@@ -101,31 +103,42 @@ class AndroidPerformanceAgent:
                     return final_text
 
                 for tool_call in response.tool_calls:
+                    safe_arguments = redact_value(tool_call.arguments)
+                    if not isinstance(safe_arguments, dict):
+                        safe_arguments = {}
+
                     self._emit(
                         "tool_started",
                         step=state.step_count,
                         name=tool_call.name,
-                        arguments=tool_call.arguments,
+                        arguments=safe_arguments,
                     )
 
                     if self.verbose:
                         print(
                             f"[Agent step {state.step_count}] "
                             f"调用 Tool: {tool_call.name} "
-                            f"{json.dumps(tool_call.arguments, ensure_ascii=False)}"
+                            f"{json.dumps(safe_arguments, ensure_ascii=False)}"
                         )
 
                     result = self.tools.execute(
                         name=tool_call.name,
                         arguments=tool_call.arguments,
                     )
+                    safe_result = redact_value(result)
+                    if not isinstance(safe_result, dict):
+                        safe_result = {
+                            "success": False,
+                            "error_type": "INVALID_TOOL_RESULT",
+                            "message": "Tool Result 不是对象。",
+                        }
 
                     state.tool_events.append(
                         ToolEvent(
                             step=state.step_count,
                             name=tool_call.name,
-                            arguments=tool_call.arguments,
-                            result=result,
+                            arguments=safe_arguments,
+                            result=safe_result,
                         )
                     )
 
@@ -133,21 +146,21 @@ class AndroidPerformanceAgent:
                         "tool_result",
                         step=state.step_count,
                         name=tool_call.name,
-                        arguments=tool_call.arguments,
-                        result=result,
+                        arguments=safe_arguments,
+                        result=safe_result,
                     )
 
                     if self.verbose:
                         print(
                             "[Tool Result] "
-                            + json.dumps(result, ensure_ascii=False, indent=2)
+                            + json.dumps(safe_result, ensure_ascii=False, indent=2)
                         )
 
                     input_items.append(
                         {
                             "type": "function_call_output",
                             "call_id": tool_call.call_id,
-                            "output": json.dumps(result, ensure_ascii=False),
+                            "output": json.dumps(safe_result, ensure_ascii=False),
                         }
                     )
 

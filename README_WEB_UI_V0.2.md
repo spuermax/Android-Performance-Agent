@@ -44,6 +44,9 @@ CLI 不传 `--event-stream` 时行为保持不变。
 - `main.py --event-stream` 输出固定前缀 JSON 事件。
 - Web 后端只消费机器事件，不从最终 LLM 文本里提取性能指标。
 - 主动 Stop 显示 `Stopped`。
+- Target Preparation 全部失败时显示 `Blocked`，Measure 标记为 blocked，
+  Analyze / Plan / Locate 标记为 skipped。
+- Tool Result、结构化 Event 与 Web Log 会脱敏 password/token/secret 等字段。
 
 ## 安全边界
 

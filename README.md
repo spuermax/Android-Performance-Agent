@@ -54,6 +54,7 @@ Android Performance Agent 将这些步骤串成一个完整流程：
 - 自动验证 App 是否能正常启动
 - 自动运行已有 AndroidX Macrobenchmark
 - 普通 Android 项目支持 Standalone Macrobenchmark Harness
+- 自动枚举真实 Gradle Build Variants，优先准备 release/non-debuggable Target
 - 自动读取 Benchmark JSON
 - 获取真实 TTID / TTFD
 - 自动收集 Perfetto Trace
@@ -201,6 +202,22 @@ Harness 通过运行时 `targetPackage` 指定目标应用。
 - 目标项目源码修改：`0`
 
 因此普通 Android 项目也可以直接进入启动性能 Measure 阶段。
+
+### Benchmark Target Preparation（V0.5.2）
+
+对于存在多个 build type 或 product flavor 的普通项目，Agent 会调用
+`prepare_benchmark_target`，从 application module 的真实 Gradle assemble tasks
+枚举候选 Variant，并按以下稳定顺序逐个检查：
+
+1. benchmark/release-like Variant
+2. 明确 non-debuggable Variant
+3. Debug Variant（仅作最后候选）
+
+每个候选依次经过 Build、APK 签名/身份检查、Install、Launch 和 Benchmark
+Readiness。单个候选失败只会记录原因并继续；只有全部候选均失败才返回
+`NO_BENCHMARK_READY_TARGET`。Product flavor 的选择与设备品牌无关。
+
+该流程不会修改 Manifest、Gradle、signingConfig、ProfileInstaller 或业务源码。
 
 ---
 
@@ -447,6 +464,7 @@ Source Localization：
 - `adb_install`
 - `adb_launch_app`
 - `inspect_benchmark_readiness`
+- `prepare_benchmark_target`
 - `run_macrobenchmark`
 - `run_standalone_macrobenchmark`
 - `analyze_perfetto_trace`

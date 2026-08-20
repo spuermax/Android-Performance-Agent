@@ -13,6 +13,12 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Mapping
 
+from web_status import (
+    apply_benchmark_readiness_result,
+    finish_dashboard_sections,
+    resolve_final_status,
+)
+
 ROOT = Path(__file__).resolve().parent
 WEB_ROOT = ROOT / "web"
 RUN_SH = ROOT / "run.sh"
@@ -168,7 +174,7 @@ def validate_run_payload(body: Any) -> tuple[str, str, int]:
     if len(task) > MAX_TASK_CHARS:
         raise RequestValidationError(f"任务最多允许 {MAX_TASK_CHARS} 个字符")
 
-    raw_max_steps = body.get("max_steps", 15)
+    raw_max_steps = body.get("max_steps", 30)
     if isinstance(raw_max_steps, bool):
         raise RequestValidationError("max_steps 必须是 1-50 的整数")
     try:
@@ -263,13 +269,8 @@ def finish_running_dashboard_sections(
     dashboard: dict[str, Any],
     final_status: str,
 ) -> None:
-    """Resolve any in-flight pipeline section when the Agent can no longer run."""
-    if final_status not in {"stopped", "failed"}:
-        return
-    for section_name in ("project", "device", "measure", "analyze", "plan", "locate"):
-        section = dashboard.get(section_name)
-        if isinstance(section, dict) and section.get("status") == "running":
-            section["status"] = final_status
+    """Backward-compatible wrapper for V0.5.2 pipeline finalization."""
+    finish_dashboard_sections(dashboard, final_status)
 
 
 def _first_ready_device(result: dict[str, Any]) -> dict[str, Any] | None:
@@ -319,6 +320,10 @@ def _apply_tool_result(name: str, result: dict[str, Any]) -> None:
                     "abi",
                 ):
                     section[key] = ready.get(key)
+            return
+
+        if name == "inspect_benchmark_readiness":
+            apply_benchmark_readiness_result(dashboard, result)
             return
 
         if name in {"run_macrobenchmark", "run_standalone_macrobenchmark"}:
@@ -396,6 +401,8 @@ def apply_agent_event(event: dict[str, Any]) -> None:
                     "inspect_project": "project",
                     "inspect_app_target": "project",
                     "adb_devices": "device",
+                    "inspect_build_variants": "measure",
+                    "inspect_benchmark_readiness": "measure",
                     "run_macrobenchmark": "measure",
                     "run_standalone_macrobenchmark": "measure",
                     "analyze_perfetto_trace": "analyze",
@@ -494,14 +501,12 @@ def run_agent(project_path: str, task: str, max_steps: int) -> None:
             state["returncode"] = code
             state["pid"] = None
             state["current_tool"] = None
-            if stopped:
-                final_status = "stopped"
-            elif reached_max_steps:
-                final_status = "incomplete"
-            elif code == 0:
-                final_status = "completed"
-            else:
-                final_status = "failed"
+            final_status = resolve_final_status(
+                stopped=stopped,
+                reached_max_steps=reached_max_steps,
+                returncode=code,
+                dashboard=state["dashboard"],
+            )
             state["status"] = final_status
             finish_running_dashboard_sections(state["dashboard"], final_status)
 

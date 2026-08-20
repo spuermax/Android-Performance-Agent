@@ -13,6 +13,7 @@ from llm.client import DeepSeekResponsesClient
 from tools.adb_tool import AdbDevicesTool, AdbInstallTool, AdbLaunchAppTool
 from tools.app_target_tool import InspectAppTargetTool
 from tools.benchmark_readiness_tool import InspectBenchmarkReadinessTool
+from tools.build_variant_tool import InspectBuildVariantsTool
 from tools.file_tool import ReadProjectFileTool
 from tools.gradle_tool import GradleBuildTool
 from tools.macrobenchmark_tool import RunMacrobenchmarkTool
@@ -29,7 +30,7 @@ EVENT_PREFIX = "__APA_EVENT__ "
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Android Performance Agent V0.5.1 - minimal Tool Calling agent."
+        description="Android Performance Agent V0.5.2 - minimal Tool Calling agent."
     )
     parser.add_argument("project_path", help="Path to the Android Gradle project.")
     parser.add_argument(
@@ -40,7 +41,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--max-steps",
         type=int,
-        default=15,
+        default=30,
         help="Maximum number of model/tool loop steps.",
     )
     parser.add_argument(
@@ -72,6 +73,7 @@ def main() -> int:
     registry = ToolRegistry()
     registry.register(InspectProjectTool(allowed_project_path=project_path))
     registry.register(GradleBuildTool(allowed_project_path=project_path))
+    registry.register(InspectBuildVariantsTool(allowed_project_path=project_path))
     registry.register(SearchProjectTextTool(allowed_project_path=project_path))
     registry.register(ReadProjectFileTool(allowed_project_path=project_path))
     registry.register(AdbDevicesTool(allowed_project_path=project_path))
