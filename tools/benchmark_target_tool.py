@@ -11,7 +11,7 @@ from tools.adb_tool import AdbInstallTool, AdbLaunchAppTool
 from tools.app_target_tool import InspectAppTargetTool
 from tools.base import BaseTool, ToolError
 from tools.benchmark_readiness_tool import InspectBenchmarkReadinessTool
-from tools.build_variant_tool import concrete_assemble_tasks
+from tools.build_variant_tool import parse_concrete_assemble_tasks
 from tools.gradle_tool import GradleBuildTool
 
 ProgressSink = Callable[[dict[str, Any]], None]
@@ -33,15 +33,6 @@ class PrepareBenchmarkTargetTool(BaseTool):
     MODULE_PATTERN = re.compile(
         r"[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*"
     )
-    VARIANT_TASK_PATTERN = re.compile(
-        r"(?m)^\s*(assemble([A-Z][A-Za-z0-9]*))\s+-\s+(.*)$"
-    )
-    NON_APK_VARIANT_SUFFIXES = (
-        "AndroidTest",
-        "UnitTest",
-        "TestFixtures",
-    )
-
     def __init__(
         self,
         allowed_project_path: Path,
@@ -335,17 +326,7 @@ class PrepareBenchmarkTargetTool(BaseTool):
                 "important_logs": GradleBuildTool._important_lines(raw),
             }
 
-        task_suffixes = {
-            match.group(1): match.group(2)
-            for match in self.VARIANT_TASK_PATTERN.finditer(raw)
-            if not match.group(2).endswith(self.NON_APK_VARIANT_SUFFIXES)
-        }
-        descriptions = {
-            match.group(1): match.group(3)
-            for match in self.VARIANT_TASK_PATTERN.finditer(raw)
-            if not match.group(2).endswith(self.NON_APK_VARIANT_SUFFIXES)
-        }
-        task_names = concrete_assemble_tasks(task_suffixes, descriptions)
+        task_names = parse_concrete_assemble_tasks(raw)
         build_text = self._module_build_text(project, module)
         variants = []
         module_task_prefix = f":{module.replace('/', ':')}:"

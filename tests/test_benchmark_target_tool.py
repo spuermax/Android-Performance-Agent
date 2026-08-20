@@ -87,13 +87,14 @@ def test_enumerates_real_assemble_tasks_and_orders_release_before_debug(
 ) -> None:
     project = make_project(tmp_path)
     stdout = """
-assembleRelease - Assembles all release variants
-assembleDebug - Assembles all debug variants
-assembleXiaomi - Assembles all Xiaomi variants
-assembleHuawei - Assembles all Huawei variants
-assembleXiaomiDebug - Assembles XiaomiDebug
-assembleXiaomiRelease - Assembles XiaomiRelease
-assembleHuaweiRelease - Assembles HuaweiRelease
+assembleRelease - Assembles main outputs for all Release variants.
+assembleDebug - Assembles main outputs for all Debug variants.
+assembleXiaomi - Assembles main outputs for all Xiaomi variants.
+assembleHuawei - Assembles main outputs for all Huawei variants.
+assembleXiaomiDebug - Assembles main output for variant xiaomiDebug
+assembleXiaomiRelease - Assembles main output for variant xiaomiRelease
+assembleHuaweiDebug - Assembles main output for variant huaweiDebug
+assembleHuaweiRelease - Assembles main output for variant huaweiRelease
 assembleBenchmark - Assembles Benchmark
 assembleXiaomiDebugAndroidTest - Assembles tests
 """
@@ -113,6 +114,7 @@ assembleXiaomiDebugAndroidTest - Assembles tests
         "Benchmark",
         "HuaweiRelease",
         "XiaomiRelease",
+        "HuaweiDebug",
         "XiaomiDebug",
     ]
     assert result["variants"][1]["assemble_task"] == (
@@ -125,6 +127,34 @@ assembleXiaomiDebugAndroidTest - Assembles tests
     assert ":edusoho:assembleDebug" not in tasks
     assert ":edusoho:assembleXiaomi" not in tasks
     assert ":edusoho:assembleHuawei" not in tasks
+
+
+def test_prepare_parser_accepts_tasks_without_descriptions(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = make_project(tmp_path)
+    stdout = "assembleXiaomiRelease\nassembleXiaomiDebug\n"
+
+    monkeypatch.setattr(
+        "tools.benchmark_target_tool.subprocess.run",
+        lambda command, **_kwargs: subprocess.CompletedProcess(
+            command,
+            0,
+            stdout,
+            "",
+        ),
+    )
+
+    result = PrepareBenchmarkTargetTool(project)._enumerate_variants(
+        project,
+        "edusoho",
+    )
+
+    assert [item["variant"] for item in result["variants"]] == [
+        "XiaomiRelease",
+        "XiaomiDebug",
+    ]
 
 
 def test_continues_after_build_failure_and_selects_next_ready_variant(

@@ -32,14 +32,14 @@ def test_discovers_real_assemble_tasks_and_prioritizes_release(
 ) -> None:
     make_project(tmp_path)
     output = """
-assembleRelease - Assembles all release variants
-assembleDebug - Assembles all debug variants
-assembleHuawei - Assembles all variants for product flavor huawei
-assembleXiaomi - Assembles all variants for product flavor xiaomi
-assembleHuaweiDebug - Assembles main outputs for variant huaweiDebug
-assembleHuaweiRelease - Assembles main outputs for variant huaweiRelease
-assembleXiaomiDebug - Assembles main outputs for variant xiaomiDebug
-assembleXiaomiRelease - Assembles main outputs for variant xiaomiRelease
+assembleRelease - Assembles main outputs for all Release variants.
+assembleDebug - Assembles main outputs for all Debug variants.
+assembleHuawei - Assembles main outputs for all Huawei variants.
+assembleXiaomi - Assembles main outputs for all Xiaomi variants.
+assembleHuaweiDebug - Assembles main output for variant huaweiDebug
+assembleHuaweiRelease - Assembles main output for variant huaweiRelease
+assembleXiaomiDebug - Assembles main output for variant xiaomiDebug
+assembleXiaomiRelease - Assembles main output for variant xiaomiRelease
 assembleXiaomiDebugAndroidTest - Assembles tests
 """
 
@@ -75,8 +75,8 @@ def test_does_not_choose_flavor_from_device_brand(
 ) -> None:
     make_project(tmp_path)
     output = """
-assembleOppoRelease - Assembles main outputs for variant oppoRelease
-assembleXiaomiRelease - Assembles main outputs for variant xiaomiRelease
+assembleOppoRelease - Assembles main output for variant oppoRelease
+assembleXiaomiRelease - Assembles main output for variant xiaomiRelease
 """
     monkeypatch.setattr(
         "tools.build_variant_tool.subprocess.run",
@@ -107,7 +107,7 @@ def test_plugin_detection_is_best_effort_for_alias_based_projects(
         "tools.build_variant_tool.subprocess.run",
         lambda *_args, **_kwargs: SimpleNamespace(
             returncode=0,
-            stdout="assembleRelease - Assembles main outputs for variant release\n",
+            stdout="assembleRelease - Assembles main output for variant release\n",
             stderr="",
         ),
     )

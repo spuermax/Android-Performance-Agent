@@ -8,6 +8,25 @@ from typing import Any
 
 from tools.base import BaseTool, ToolError
 
+ASSEMBLE_TASK_PATTERN = re.compile(
+    r"^\s*(assemble([A-Z][A-Za-z0-9]*))\b(?:\s+-\s+(.*))?$"
+)
+EXCLUDED_ASSEMBLE_SUFFIXES = (
+    "AndroidTest",
+    "UnitTest",
+    "TestFixtures",
+    "Sources",
+    "Javadoc",
+)
+AGGREGATE_DESCRIPTION_PATTERN = re.compile(
+    r"\bmain\s+outputs?\s+for\s+all\b.*\bvariants?\b",
+    re.IGNORECASE,
+)
+CONCRETE_DESCRIPTION_PATTERN = re.compile(
+    r"\bmain\s+output\s+for\s+variant\b",
+    re.IGNORECASE,
+)
+
 
 def concrete_assemble_tasks(
     task_suffixes: dict[str, str],
@@ -21,18 +40,11 @@ def concrete_assemble_tasks(
     }
     concrete: set[str] = set()
     for task_name, suffix in normalized.items():
-        description = (descriptions.get(task_name) or "").casefold()
-        explicitly_concrete = (
-            "main output" in description and "variant" in description
-        )
-        explicitly_aggregate = (
-            "all" in description
-            and any(word in description for word in ("build", "variant", "output"))
-        )
-        if explicitly_concrete:
-            concrete.add(task_name)
+        description = descriptions.get(task_name) or ""
+        if AGGREGATE_DESCRIPTION_PATTERN.search(description):
             continue
-        if explicitly_aggregate:
+        if CONCRETE_DESCRIPTION_PATTERN.search(description):
+            concrete.add(task_name)
             continue
         structurally_aggregate = any(
             suffix != other
@@ -42,6 +54,30 @@ def concrete_assemble_tasks(
         if not structurally_aggregate:
             concrete.add(task_name)
     return concrete
+
+
+def parse_concrete_assemble_tasks(
+    raw: str,
+) -> dict[str, tuple[str, str | None]]:
+    """Parse Gradle task lines and return only concrete APK variants."""
+    parsed: dict[str, tuple[str, str | None]] = {}
+    for line in raw.splitlines():
+        match = ASSEMBLE_TASK_PATTERN.match(line)
+        if match is None:
+            continue
+        task_name = match.group(1)
+        suffix = match.group(2)
+        if any(suffix.endswith(excluded) for excluded in EXCLUDED_ASSEMBLE_SUFFIXES):
+            continue
+        parsed[task_name] = (suffix, match.group(3))
+
+    suffixes = {task_name: value[0] for task_name, value in parsed.items()}
+    descriptions = {task_name: value[1] for task_name, value in parsed.items()}
+    concrete_names = concrete_assemble_tasks(suffixes, descriptions)
+    return {
+        task_name: parsed[task_name]
+        for task_name in concrete_names
+    }
 
 
 class InspectBuildVariantsTool(BaseTool):
@@ -56,16 +92,6 @@ class InspectBuildVariantsTool(BaseTool):
 
     DEFAULT_TIMEOUT_SECONDS = 180
     MODULE_PATTERN = re.compile(r"[A-Za-z0-9_.-]+(?::[A-Za-z0-9_.-]+)*")
-    TASK_PATTERN = re.compile(
-        r"^\s*(assemble([A-Z][A-Za-z0-9]*))\b(?:\s+-\s+(.*))?$"
-    )
-    EXCLUDED_SUFFIXES = (
-        "AndroidTest",
-        "UnitTest",
-        "TestFixtures",
-        "Sources",
-        "Javadoc",
-    )
 
     @property
     def parameters_schema(self) -> dict[str, Any]:
@@ -216,22 +242,9 @@ class InspectBuildVariantsTool(BaseTool):
         module: str,
         build_text: str,
     ) -> list[dict[str, Any]]:
-        matches: dict[str, tuple[str, str | None]] = {}
-        for line in raw.splitlines():
-            match = cls.TASK_PATTERN.match(line)
-            if match is None:
-                continue
-            task_name = match.group(1)
-            suffix = match.group(2)
-            if any(suffix.endswith(excluded) for excluded in cls.EXCLUDED_SUFFIXES):
-                continue
-            matches[task_name] = (suffix, match.group(3))
-
+        matches = parse_concrete_assemble_tasks(raw)
         by_task: dict[str, dict[str, Any]] = {}
-        suffixes = {task_name: value[0] for task_name, value in matches.items()}
-        descriptions = {task_name: value[1] for task_name, value in matches.items()}
-        for task_name in concrete_assemble_tasks(suffixes, descriptions):
-            suffix = suffixes[task_name]
+        for task_name, (suffix, _description) in matches.items():
             build_type = cls._guess_build_type(suffix)
             flavor = cls._guess_flavor(suffix, build_type)
             priority = cls._priority(build_type)
