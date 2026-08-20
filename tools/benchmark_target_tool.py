@@ -5,13 +5,16 @@ import re
 import shutil
 import subprocess
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from tools.adb_tool import AdbInstallTool, AdbLaunchAppTool
 from tools.app_target_tool import InspectAppTargetTool
 from tools.base import BaseTool, ToolError
 from tools.benchmark_readiness_tool import InspectBenchmarkReadinessTool
+from tools.build_variant_tool import concrete_assemble_tasks
 from tools.gradle_tool import GradleBuildTool
+
+ProgressSink = Callable[[dict[str, Any]], None]
 
 
 class PrepareBenchmarkTargetTool(BaseTool):
@@ -31,7 +34,7 @@ class PrepareBenchmarkTargetTool(BaseTool):
         r"[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*"
     )
     VARIANT_TASK_PATTERN = re.compile(
-        r"(?m)^\s*(assemble([A-Z][A-Za-z0-9]*))\s+-\s+"
+        r"(?m)^\s*(assemble([A-Z][A-Za-z0-9]*))\s+-\s+(.*)$"
     )
     NON_APK_VARIANT_SUFFIXES = (
         "AndroidTest",
@@ -47,6 +50,7 @@ class PrepareBenchmarkTargetTool(BaseTool):
         install_tool: AdbInstallTool | None = None,
         launch_tool: AdbLaunchAppTool | None = None,
         readiness_tool: InspectBenchmarkReadinessTool | None = None,
+        progress_sink: ProgressSink | None = None,
     ) -> None:
         super().__init__(allowed_project_path=allowed_project_path)
         self.gradle_tool = gradle_tool or GradleBuildTool(allowed_project_path)
@@ -55,6 +59,7 @@ class PrepareBenchmarkTargetTool(BaseTool):
         self.readiness_tool = readiness_tool or InspectBenchmarkReadinessTool(
             allowed_project_path
         )
+        self.progress_sink = progress_sink
 
     @property
     def parameters_schema(self) -> dict[str, Any]:
@@ -145,7 +150,14 @@ class PrepareBenchmarkTargetTool(BaseTool):
 
         candidate_results: list[dict[str, Any]] = []
         all_blocking_reasons: list[str] = []
-        for candidate in variants:
+        candidate_total = len(variants)
+        for candidate_index, candidate in enumerate(variants, start=1):
+            self._emit_progress(
+                candidate_index,
+                candidate_total,
+                str(candidate["variant"]),
+                "BUILDING",
+            )
             result = self._evaluate_candidate(
                 project=project,
                 module=module,
@@ -153,6 +165,15 @@ class PrepareBenchmarkTargetTool(BaseTool):
                 candidate=candidate,
                 fallback_application_id=fallback_application_id,
                 fallback_component=fallback_component,
+                candidate_index=candidate_index,
+                candidate_total=candidate_total,
+            )
+            self._emit_progress(
+                candidate_index,
+                candidate_total,
+                str(candidate["variant"]),
+                str(result["status"]),
+                error_type=result.get("rejection_reason"),
             )
             candidate_results.append(result)
             for reason in result["blocking_reasons"]:
@@ -314,11 +335,17 @@ class PrepareBenchmarkTargetTool(BaseTool):
                 "important_logs": GradleBuildTool._important_lines(raw),
             }
 
-        task_names = {
-            match.group(1)
+        task_suffixes = {
+            match.group(1): match.group(2)
             for match in self.VARIANT_TASK_PATTERN.finditer(raw)
             if not match.group(2).endswith(self.NON_APK_VARIANT_SUFFIXES)
         }
+        descriptions = {
+            match.group(1): match.group(3)
+            for match in self.VARIANT_TASK_PATTERN.finditer(raw)
+            if not match.group(2).endswith(self.NON_APK_VARIANT_SUFFIXES)
+        }
+        task_names = concrete_assemble_tasks(task_suffixes, descriptions)
         build_text = self._module_build_text(project, module)
         variants = []
         module_task_prefix = f":{module.replace('/', ':')}:"
@@ -345,6 +372,8 @@ class PrepareBenchmarkTargetTool(BaseTool):
         candidate: dict[str, Any],
         fallback_application_id: str | None,
         fallback_component: str | None,
+        candidate_index: int,
+        candidate_total: int,
     ) -> dict[str, Any]:
         result = {
             **candidate,
@@ -380,6 +409,12 @@ class PrepareBenchmarkTargetTool(BaseTool):
             )
             return result
         result["build_success"] = True
+        self._emit_progress(
+            candidate_index,
+            candidate_total,
+            str(candidate["variant"]),
+            "INSPECTING_APK",
+        )
         apk_outputs = [
             Path(path).resolve()
             for path in build.get("apk_outputs", [])
@@ -421,6 +456,12 @@ class PrepareBenchmarkTargetTool(BaseTool):
             attempt["application_id"] = application_id
             attempt["launcher_component"] = launcher_component
 
+            self._emit_progress(
+                candidate_index,
+                candidate_total,
+                str(candidate["variant"]),
+                "INSTALLING",
+            )
             install = self.install_tool.execute(
                 {
                     "project_path": str(project),
@@ -444,6 +485,12 @@ class PrepareBenchmarkTargetTool(BaseTool):
                     "launcher_component": launcher_component,
                 }
             )
+            self._emit_progress(
+                candidate_index,
+                candidate_total,
+                str(candidate["variant"]),
+                "LAUNCHING",
+            )
             launch = self.launch_tool.execute(
                 {
                     "serial": serial,
@@ -459,6 +506,12 @@ class PrepareBenchmarkTargetTool(BaseTool):
                 continue
             result["launch_success"] = True
 
+            self._emit_progress(
+                candidate_index,
+                candidate_total,
+                str(candidate["variant"]),
+                "CHECKING_READINESS",
+            )
             readiness = self.readiness_tool.execute(
                 {"serial": serial, "package_name": application_id}
             )
@@ -516,6 +569,33 @@ class PrepareBenchmarkTargetTool(BaseTool):
             }
         )
         return result
+
+    def _emit_progress(
+        self,
+        candidate_index: int,
+        candidate_total: int,
+        variant: str,
+        status: str,
+        *,
+        error_type: Any = None,
+    ) -> None:
+        if self.progress_sink is None:
+            return
+        try:
+            self.progress_sink(
+                {
+                    "type": "tool_progress",
+                    "name": self.name,
+                    "candidate_index": candidate_index,
+                    "candidate_total": candidate_total,
+                    "variant": variant,
+                    "status": status,
+                    "error_type": error_type,
+                }
+            )
+        except Exception:
+            # UI progress must never interrupt deterministic target preparation.
+            return
 
     @classmethod
     def _variant_metadata(

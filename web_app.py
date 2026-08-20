@@ -42,6 +42,7 @@ def empty_dashboard(project_path: str = "") -> dict[str, Any]:
     return {
         "project": {
             "status": "pending",
+            "target_confirmed": False,
             "path": project_path,
             "module": None,
             "application_id": None,
@@ -66,6 +67,7 @@ def empty_dashboard(project_path: str = "") -> dict[str, Any]:
             "candidates_discovered": None,
             "candidates_checked": None,
             "candidate_results": [],
+            "candidate_progress": None,
             "ttid_ms": None,
             "ttfd_available": False,
             "ttfd_ms": None,
@@ -301,16 +303,33 @@ def _apply_tool_result(name: str, result: dict[str, Any]) -> None:
             return
 
         if name == "inspect_app_target":
-            dashboard["project"].update(
-                {
-                    "status": _section_status(result),
-                    "module": result.get("module"),
-                    "application_id": result.get("application_id"),
-                    "launcher_activity": result.get("launcher_activity"),
-                    "launcher_component": result.get("launcher_component"),
-                    "summary": result.get("summary"),
-                }
-            )
+            section = dashboard["project"]
+            success = result.get("success") is True
+            if success:
+                section.update(
+                    {
+                        "status": "success",
+                        "target_confirmed": True,
+                        "module": result.get("module"),
+                        "application_id": result.get("application_id"),
+                        "launcher_activity": result.get("launcher_activity"),
+                        "launcher_component": result.get("launcher_component"),
+                        "summary": result.get("summary"),
+                    }
+                )
+            elif not section.get("target_confirmed"):
+                section.update(
+                    {
+                        "status": "failed",
+                        "module": result.get("module"),
+                        "application_id": result.get("application_id"),
+                        "launcher_activity": result.get("launcher_activity"),
+                        "launcher_component": result.get("launcher_component"),
+                        "summary": result.get("summary"),
+                    }
+                )
+            else:
+                section["status"] = "success"
             return
 
         if name == "adb_devices":
@@ -373,6 +392,7 @@ def _apply_tool_result(name: str, result: dict[str, Any]) -> None:
                         or dashboard["project"].get("application_id"),
                         "launcher_component": result.get("launcher_component")
                         or dashboard["project"].get("launcher_component"),
+                        "target_confirmed": True,
                     }
                 )
                 for section_name in ("analyze", "plan", "locate"):
@@ -472,6 +492,8 @@ def apply_agent_event(event: dict[str, Any]) -> None:
                 }.get(name)
                 if stage is not None:
                     state["dashboard"][stage]["status"] = "running"
+                    if name == "prepare_benchmark_target":
+                        state["dashboard"][stage]["candidate_progress"] = None
         return
 
     if event_type == "tool_result":
@@ -479,6 +501,32 @@ def apply_agent_event(event: dict[str, Any]) -> None:
         result = event.get("result")
         if isinstance(name, str) and isinstance(result, dict):
             _apply_tool_result(name, result)
+        return
+
+    if event_type == "tool_progress":
+        if event.get("name") == "prepare_benchmark_target":
+            with lock:
+                progress = {
+                    key: event.get(key)
+                    for key in (
+                        "candidate_index",
+                        "candidate_total",
+                        "variant",
+                        "status",
+                        "error_type",
+                    )
+                }
+                section = state["dashboard"]["measure"]
+                section["candidate_progress"] = progress
+                section["status"] = "running"
+                summary = (
+                    f"{progress['candidate_index']} / {progress['candidate_total']} - "
+                    f"{progress['variant']} - {progress['status']}"
+                )
+                if progress.get("error_type"):
+                    summary += f" - {progress['error_type']}"
+                section["summary"] = summary
+                state["current_tool"] = f"prepare_benchmark_target · {summary}"
         return
 
     if event_type == "final":

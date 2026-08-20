@@ -87,6 +87,10 @@ def test_enumerates_real_assemble_tasks_and_orders_release_before_debug(
 ) -> None:
     project = make_project(tmp_path)
     stdout = """
+assembleRelease - Assembles all release variants
+assembleDebug - Assembles all debug variants
+assembleXiaomi - Assembles all Xiaomi variants
+assembleHuawei - Assembles all Huawei variants
 assembleXiaomiDebug - Assembles XiaomiDebug
 assembleXiaomiRelease - Assembles XiaomiRelease
 assembleHuaweiRelease - Assembles HuaweiRelease
@@ -116,6 +120,11 @@ assembleXiaomiDebugAndroidTest - Assembles tests
     )
     assert result["variants"][1]["debuggable"] is False
     assert result["variants"][-1]["debuggable"] is True
+    tasks = {item["assemble_task"] for item in result["variants"]}
+    assert ":edusoho:assembleRelease" not in tasks
+    assert ":edusoho:assembleDebug" not in tasks
+    assert ":edusoho:assembleXiaomi" not in tasks
+    assert ":edusoho:assembleHuawei" not in tasks
 
 
 def test_continues_after_build_failure_and_selects_next_ready_variant(
@@ -147,12 +156,14 @@ def test_continues_after_build_failure_and_selects_next_ready_variant(
             }
         ]
     )
+    progress_events: list[dict[str, Any]] = []
     tool = PrepareBenchmarkTargetTool(
         project,
         gradle_tool=gradle,  # type: ignore[arg-type]
         install_tool=install,  # type: ignore[arg-type]
         launch_tool=launch,  # type: ignore[arg-type]
         readiness_tool=readiness,  # type: ignore[arg-type]
+        progress_sink=progress_events.append,
     )
     variants = [
         candidate("HuaweiRelease", build_type="release", debuggable=False, priority=1),
@@ -185,6 +196,26 @@ def test_continues_after_build_failure_and_selects_next_ready_variant(
         ":edusoho:assembleXiaomiRelease",
     ]
     assert "设备品牌无关" in result["selection_reason"]
+    assert progress_events[0] == {
+        "type": "tool_progress",
+        "name": "prepare_benchmark_target",
+        "candidate_index": 1,
+        "candidate_total": 3,
+        "variant": "HuaweiRelease",
+        "status": "BUILDING",
+        "error_type": None,
+    }
+    assert any(
+        event["candidate_index"] == 1 and event["status"] == "BUILD_FAILED"
+        for event in progress_events
+    )
+    assert any(
+        event["candidate_index"] == 2
+        and event["variant"] == "XiaomiRelease"
+        and event["status"] == "CHECKING_READINESS"
+        for event in progress_events
+    )
+    assert progress_events[-1]["status"] == "BENCHMARK_READY"
 
 
 def test_tries_every_candidate_before_returning_blocked(

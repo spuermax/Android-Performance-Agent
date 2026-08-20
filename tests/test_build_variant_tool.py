@@ -32,6 +32,10 @@ def test_discovers_real_assemble_tasks_and_prioritizes_release(
 ) -> None:
     make_project(tmp_path)
     output = """
+assembleRelease - Assembles all release variants
+assembleDebug - Assembles all debug variants
+assembleHuawei - Assembles all variants for product flavor huawei
+assembleXiaomi - Assembles all variants for product flavor xiaomi
 assembleHuaweiDebug - Assembles main outputs for variant huaweiDebug
 assembleHuaweiRelease - Assembles main outputs for variant huaweiRelease
 assembleXiaomiDebug - Assembles main outputs for variant xiaomiDebug
@@ -57,6 +61,10 @@ assembleXiaomiDebugAndroidTest - Assembles tests
         ":edusoho:assembleXiaomiDebug",
     ]
     assert all("AndroidTest" not in task for task in tasks)
+    assert ":edusoho:assembleRelease" not in tasks
+    assert ":edusoho:assembleDebug" not in tasks
+    assert ":edusoho:assembleHuawei" not in tasks
+    assert ":edusoho:assembleXiaomi" not in tasks
     assert result["variants"][0]["formal_benchmark_candidate"] is True
     assert result["variants"][0]["signing_config_declared"] is False
 
@@ -108,3 +116,17 @@ def test_plugin_detection_is_best_effort_for_alias_based_projects(
     assert result["success"] is True
     assert result["application_plugin_declared"] is False
     assert result["variants"][0]["assemble_task"] == ":app:assembleRelease"
+
+
+def test_keeps_concrete_release_beside_custom_pre_release_build_type() -> None:
+    raw = """
+assembleRelease - Assembles main output for variant release
+assemblePreRelease - Assembles main output for variant preRelease
+"""
+
+    variants = InspectBuildVariantsTool._parse_variants(raw, "app", "")
+
+    assert {item["assemble_task"] for item in variants} == {
+        ":app:assembleRelease",
+        ":app:assemblePreRelease",
+    }

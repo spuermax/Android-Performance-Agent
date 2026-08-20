@@ -67,6 +67,69 @@ def test_final_event_preserves_max_steps_state() -> None:
     assert web_app.state["reached_max_steps"] is True
 
 
+def test_target_preparation_progress_is_visible_in_measure() -> None:
+    reset()
+
+    web_app.apply_agent_event(
+        {
+            "type": "tool_progress",
+            "name": "prepare_benchmark_target",
+            "candidate_index": 7,
+            "candidate_total": 20,
+            "variant": "OppoRelease",
+            "status": "READINESS_FAILED",
+            "error_type": "TARGET_NOT_PROFILEABLE",
+        }
+    )
+
+    measure = web_app.state["dashboard"]["measure"]
+    assert measure["status"] == "running"
+    assert measure["candidate_progress"]["variant"] == "OppoRelease"
+    assert measure["summary"] == (
+        "7 / 20 - OppoRelease - READINESS_FAILED - TARGET_NOT_PROFILEABLE"
+    )
+    assert "7 / 20" in web_app.state["current_tool"]
+
+
+def test_failed_app_candidate_does_not_replace_confirmed_target() -> None:
+    reset()
+    web_app.apply_agent_event(
+        {
+            "type": "tool_result",
+            "name": "inspect_app_target",
+            "result": {
+                "success": True,
+                "module": "edusoho",
+                "application_id": "com.example.edusoho",
+                "launcher_activity": "com.example.edusoho.MainActivity",
+                "summary": "confirmed",
+            },
+        }
+    )
+    web_app.apply_agent_event(
+        {"type": "tool_started", "name": "inspect_app_target"}
+    )
+    web_app.apply_agent_event(
+        {
+            "type": "tool_result",
+            "name": "inspect_app_target",
+            "result": {
+                "success": False,
+                "module": "app",
+                "application_id": None,
+                "error_type": "MODULE_NOT_FOUND",
+                "summary": "app failed",
+            },
+        }
+    )
+
+    project = web_app.state["dashboard"]["project"]
+    assert project["status"] == "success"
+    assert project["module"] == "edusoho"
+    assert project["application_id"] == "com.example.edusoho"
+    assert project["summary"] == "confirmed"
+
+
 def test_dashboard_collects_project_device_analysis_and_plan_results() -> None:
     reset()
     web_app.apply_agent_event(

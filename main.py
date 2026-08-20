@@ -20,6 +20,7 @@ from tools.gradle_tool import GradleBuildTool
 from tools.macrobenchmark_tool import RunMacrobenchmarkTool
 from tools.perfetto_analysis_tool import AnalyzePerfettoTraceTool
 from tools.project_tool import InspectProjectTool
+from tools.redaction import redact_value
 from tools.registry import ToolRegistry
 from tools.search_tool import SearchProjectTextTool
 from tools.startup_source_locator_tool import LocateStartupBottleneckSourceTool
@@ -59,8 +60,10 @@ def parse_args() -> argparse.Namespace:
 
 
 def _event_stdout_sink(event: dict[str, Any]) -> None:
+    safe_event = redact_value(event)
     print(
-        EVENT_PREFIX + json.dumps(event, ensure_ascii=False, separators=(",", ":")),
+        EVENT_PREFIX
+        + json.dumps(safe_event, ensure_ascii=False, separators=(",", ":")),
         flush=True,
     )
 
@@ -75,7 +78,10 @@ def main() -> int:
     registry.register(InspectProjectTool(allowed_project_path=project_path))
     registry.register(GradleBuildTool(allowed_project_path=project_path))
     registry.register(InspectBuildVariantsTool(allowed_project_path=project_path))
-    registry.register(PrepareBenchmarkTargetTool(allowed_project_path=project_path))
+    registry.register(PrepareBenchmarkTargetTool(
+        allowed_project_path=project_path,
+        progress_sink=_event_stdout_sink if args.event_stream else None,
+    ))
     registry.register(SearchProjectTextTool(allowed_project_path=project_path))
     registry.register(ReadProjectFileTool(allowed_project_path=project_path))
     registry.register(AdbDevicesTool(allowed_project_path=project_path))
